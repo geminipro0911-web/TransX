@@ -422,19 +422,21 @@ public class TransXService extends Service {
 
                     // 2. Chế độ Dịch đè trực tiếp (In-Place Mode): Vẽ chữ đè lên vị trí gốc trên màn hình
                     if (prefs.isInPlaceMode()) {
-                        List<OfflineOcrEngine.OcrBlock> blocks = null;
+                        List<OfflineOcrEngine.OcrBlock> rawBlocks = null;
                         try {
-                            blocks = OfflineOcrEngine.recognizeBlocks(bmp, srcLang, liveScanRegion);
+                            rawBlocks = OfflineOcrEngine.recognizeBlocks(bmp, srcLang, liveScanRegion);
                         } catch (Throwable ignored) {}
                         bmp.recycle();
 
                         if (!isLiveOcrRunning || epoch != liveOcrEpoch.get()) break;
 
-                        if (blocks == null || blocks.isEmpty()) {
+                        if (rawBlocks == null || rawBlocks.isEmpty()) {
                             mainHandler.post(() -> floatingManager.updateInPlaceBlocks(null));
                             Thread.sleep(200);
                             continue;
                         }
+
+                        final List<OfflineOcrEngine.OcrBlock> blocks = rawBlocks;
 
                         StringBuilder combinedOrig = new StringBuilder();
                         StringBuilder combinedTrans = new StringBuilder();
@@ -697,18 +699,20 @@ public class TransXService extends Service {
                 String tgtLang = prefs.getTargetLang();
 
                 if (prefs.isInPlaceMode()) {
-                    List<OfflineOcrEngine.OcrBlock> blocks = null;
+                    List<OfflineOcrEngine.OcrBlock> rawBlocks = null;
                     try {
-                        blocks = OfflineOcrEngine.recognizeBlocks(bitmap, srcLang, liveScanRegion);
+                        rawBlocks = OfflineOcrEngine.recognizeBlocks(bitmap, srcLang, liveScanRegion);
                     } catch (Throwable ignored) {}
                     bitmap.recycle();
 
                     if (epoch != liveOcrEpoch.get()) return;
 
-                    if (blocks == null || blocks.isEmpty()) {
+                    if (rawBlocks == null || rawBlocks.isEmpty()) {
                         mainHandler.post(() -> floatingManager.updateInPlaceBlocks(null));
                         return;
                     }
+
+                    final List<OfflineOcrEngine.OcrBlock> blocks = rawBlocks;
 
                     StringBuilder fullOrig = new StringBuilder();
                     StringBuilder fullTrans = new StringBuilder();
