@@ -70,6 +70,12 @@ public class FloatingManager {
     public void showAll() {
         showBubble();
         showSubtitle();
+        if (new com.transx.screen.util.Prefs(context).isInPlaceMode()) {
+            showInPlaceOverlay();
+            if (subtitleView != null) {
+                subtitleView.setVisibility(View.GONE);
+            }
+        }
     }
 
     public void showBubble() {
@@ -175,8 +181,14 @@ public class FloatingManager {
             public void onToggleInPlace(boolean enabled) {
                 if (enabled) {
                     showInPlaceOverlay();
+                    if (subtitleView != null) {
+                        subtitleView.setVisibility(View.GONE);
+                    }
                 } else {
                     hideInPlaceOverlay();
+                    if (subtitleView != null) {
+                        subtitleView.setVisibility(View.VISIBLE);
+                    }
                 }
                 if (listener != null) listener.onToggleInPlace(enabled);
             }
@@ -258,6 +270,7 @@ public class FloatingManager {
     }
 
     public void hideTemporarily(Runnable action) {
+        final int prevSubtitleVis = (subtitleView != null) ? subtitleView.getVisibility() : View.GONE;
         if (bubbleView != null) bubbleView.setVisibility(View.INVISIBLE);
         if (subtitleView != null) subtitleView.setVisibility(View.INVISIBLE);
         if (inPlaceOverlayView != null) inPlaceOverlayView.setVisibility(View.INVISIBLE);
@@ -268,7 +281,7 @@ public class FloatingManager {
                     action.run();
                 } finally {
                     if (bubbleView != null) bubbleView.setVisibility(View.VISIBLE);
-                    if (subtitleView != null) subtitleView.setVisibility(View.VISIBLE);
+                    if (subtitleView != null) subtitleView.setVisibility(prevSubtitleVis);
                     if (inPlaceOverlayView != null) inPlaceOverlayView.setVisibility(View.VISIBLE);
                 }
             }, 50);
@@ -302,9 +315,7 @@ public class FloatingManager {
     }
 
     public void addTranslation(String orig, String trans) {
-        if (subtitleView == null) showSubtitle();
         if (subtitleView != null) {
-            subtitleView.setVisibility(View.VISIBLE);
             subtitleView.addTranslation(orig, trans);
         }
     }

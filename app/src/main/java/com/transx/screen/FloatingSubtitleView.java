@@ -184,7 +184,7 @@ public class FloatingSubtitleView extends LinearLayout {
         // 6. Nút Dịch đè trực tiếp màn hình (In-Place Mode)
         btnInPlace = createSmallButton("🔤", "Bật/Tắt dịch đè màn hình", v -> {
             prefs.setInPlaceMode(!prefs.isInPlaceMode());
-            String msg = prefs.isInPlaceMode() ? "Đã bật dịch đè trực tiếp lên chữ màn hình!" : "Đã tắt dịch đè trực tiếp";
+            String msg = prefs.isInPlaceMode() ? "Đã bật dịch đè (Cửa sổ phụ đề sẽ ẩn). Chạm vào bong bóng tròn để mở lại!" : "Đã tắt dịch đè trực tiếp";
             Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
             updateInPlaceState();
             if (listener != null) listener.onToggleInPlace(prefs.isInPlaceMode());
