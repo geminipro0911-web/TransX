@@ -350,6 +350,11 @@ public class TransXService extends Service {
         return s;
     }
 
+    public static boolean isLikelyVietnamese(String text) {
+        if (text == null || text.trim().isEmpty()) return false;
+        return text.matches("(?i).*[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ].*");
+    }
+
     // ---------- VÒNG LẶP LIVE OCR LIÊN TỤC TRÊN MÀN HÌNH ----------
 
     private synchronized void startLiveOcr() {
@@ -417,22 +422,61 @@ public class TransXService extends Service {
 
                     // 2. Chế độ Dịch đè trực tiếp (In-Place Mode): Vẽ chữ đè lên vị trí gốc trên màn hình
                     if (prefs.isInPlaceMode()) {
+                        List<OfflineOcrEngine.OcrBlock> blocks = null;
                         try {
-                            List<OfflineOcrEngine.OcrBlock> blocks = OfflineOcrEngine.recognizeBlocks(bmp, srcLang, liveScanRegion);
-                            if (blocks != null && !blocks.isEmpty()) {
-                                for (OfflineOcrEngine.OcrBlock b : blocks) {
-                                    String cleanB = cleanOcrText(b.originalText, srcLang);
-                                    if (!cleanB.isEmpty()) {
-                                        String t = translationManager.translate(cleanB, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
-                                        b.translatedText = cleanSpokenText(t);
-                                    }
-                                }
-                                mainHandler.post(() -> floatingManager.updateInPlaceBlocks(blocks));
-                            }
+                            blocks = OfflineOcrEngine.recognizeBlocks(bmp, srcLang, liveScanRegion);
                         } catch (Throwable ignored) {}
+                        bmp.recycle();
+
+                        if (!isLiveOcrRunning || epoch != liveOcrEpoch.get()) break;
+
+                        if (blocks == null || blocks.isEmpty()) {
+                            mainHandler.post(() -> floatingManager.updateInPlaceBlocks(null));
+                            Thread.sleep(200);
+                            continue;
+                        }
+
+                        StringBuilder combinedOrig = new StringBuilder();
+                        StringBuilder combinedTrans = new StringBuilder();
+
+                        for (OfflineOcrEngine.OcrBlock b : blocks) {
+                            String cleanB = cleanOcrText(b.originalText, srcLang);
+                            // BỎ QUA nếu khối này là chữ tiếng Việt (bản dịch đã hiển thị trên màn hình)
+                            if (cleanB.isEmpty() || (!"vi".equalsIgnoreCase(srcLang) && isLikelyVietnamese(cleanB))) {
+                                continue;
+                            }
+
+                            String t = translationManager.translate(cleanB, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
+                            b.translatedText = cleanSpokenText(t);
+
+                            if (combinedOrig.length() > 0) combinedOrig.append(" ");
+                            combinedOrig.append(cleanB);
+
+                            if (combinedTrans.length() > 0) combinedTrans.append(" ");
+                            combinedTrans.append(b.translatedText);
+                        }
+
+                        if (!isLiveOcrRunning || epoch != liveOcrEpoch.get()) break;
+                        mainHandler.post(() -> floatingManager.updateInPlaceBlocks(blocks));
+
+                        String origStr = combinedOrig.toString().trim();
+                        String transStr = combinedTrans.toString().trim();
+
+                        if (!origStr.isEmpty() && !origStr.equalsIgnoreCase(lastRecognizedText)) {
+                            lastRecognizedText = origStr;
+                            mainHandler.post(() -> floatingManager.addTranslation(origStr, transStr));
+
+                            if (prefs.isTtsEnabled() && ttsPlayer != null && !transStr.isEmpty()) {
+                                Lang targetLang = Lang.findByEdgeCode(tgtLang);
+                                ttsPlayer.speak(transStr, targetLang.googleSttCode);
+                            }
+                        }
+
+                        Thread.sleep(250);
+                        continue;
                     }
 
-                    // 3. Chạy nhận dạng chữ toàn khối cho HUD và TTS
+                    // 3. Chạy nhận dạng chữ toàn khối cho HUD và TTS (khi KHÔNG bật dịch đè)
                     String recognized = OfflineOcrEngine.recognizeText(bmp, srcLang);
                     bmp.recycle();
 
@@ -445,6 +489,12 @@ public class TransXService extends Service {
 
                     String cleanText = cleanOcrText(recognized, srcLang);
                     if (cleanText.isEmpty() || cleanText.equalsIgnoreCase(lastRecognizedText)) {
+                        Thread.sleep(200);
+                        continue;
+                    }
+
+                    // Bỏ qua nếu nguồn không phải tiếng Việt nhưng OCR lại nhận dạng ra tiếng Việt
+                    if (!"vi".equalsIgnoreCase(srcLang) && isLikelyVietnamese(cleanText)) {
                         Thread.sleep(200);
                         continue;
                     }
@@ -647,19 +697,53 @@ public class TransXService extends Service {
                 String tgtLang = prefs.getTargetLang();
 
                 if (prefs.isInPlaceMode()) {
+                    List<OfflineOcrEngine.OcrBlock> blocks = null;
                     try {
-                        List<OfflineOcrEngine.OcrBlock> blocks = OfflineOcrEngine.recognizeBlocks(bitmap, srcLang, liveScanRegion);
-                        if (blocks != null && !blocks.isEmpty()) {
-                            for (OfflineOcrEngine.OcrBlock b : blocks) {
-                                String cleanB = cleanOcrText(b.originalText, srcLang);
-                                if (!cleanB.isEmpty()) {
-                                    String t = translationManager.translate(cleanB, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
-                                    b.translatedText = cleanSpokenText(t);
-                                }
-                            }
-                            mainHandler.post(() -> floatingManager.updateInPlaceBlocks(blocks));
-                        }
+                        blocks = OfflineOcrEngine.recognizeBlocks(bitmap, srcLang, liveScanRegion);
                     } catch (Throwable ignored) {}
+                    bitmap.recycle();
+
+                    if (epoch != liveOcrEpoch.get()) return;
+
+                    if (blocks == null || blocks.isEmpty()) {
+                        mainHandler.post(() -> floatingManager.updateInPlaceBlocks(null));
+                        return;
+                    }
+
+                    StringBuilder fullOrig = new StringBuilder();
+                    StringBuilder fullTrans = new StringBuilder();
+
+                    for (OfflineOcrEngine.OcrBlock b : blocks) {
+                        String cleanB = cleanOcrText(b.originalText, srcLang);
+                        if (cleanB.isEmpty() || (!"vi".equalsIgnoreCase(srcLang) && isLikelyVietnamese(cleanB))) {
+                            continue;
+                        }
+                        String t = translationManager.translate(cleanB, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
+                        b.translatedText = cleanSpokenText(t);
+
+                        if (fullOrig.length() > 0) fullOrig.append(" ");
+                        fullOrig.append(cleanB);
+                        if (fullTrans.length() > 0) fullTrans.append(" ");
+                        fullTrans.append(b.translatedText);
+                    }
+
+                    if (epoch != liveOcrEpoch.get()) return;
+                    mainHandler.post(() -> floatingManager.updateInPlaceBlocks(blocks));
+
+                    String origStr = fullOrig.toString().trim();
+                    String transStr = fullTrans.toString().trim();
+                    if (!origStr.isEmpty()) {
+                        mainHandler.post(() -> {
+                            floatingManager.addTranslation(origStr, transStr);
+                            floatingManager.updateStatus("Đã dịch đè xong chữ màn hình", Color.parseColor("#10B981"));
+                        });
+
+                        if (prefs.isTtsEnabled() && ttsPlayer != null && !transStr.isEmpty()) {
+                            Lang targetLang = Lang.findByEdgeCode(tgtLang);
+                            ttsPlayer.speak(transStr, targetLang.googleSttCode);
+                        }
+                    }
+                    return;
                 }
 
                 String recognized = OfflineOcrEngine.recognizeText(bitmap, srcLang);
@@ -677,6 +761,7 @@ public class TransXService extends Service {
 
                 String cleanRec = cleanOcrText(recognized, srcLang);
                 if (cleanRec.isEmpty()) return;
+                if (!"vi".equalsIgnoreCase(srcLang) && isLikelyVietnamese(cleanRec)) return;
 
                 mainHandler.post(() -> floatingManager.updateStatus("Đang dịch chữ OCR...", Color.parseColor("#38BDF8")));
 
