@@ -483,9 +483,10 @@ public class TransXService extends Service {
                     String cleanTrans = cleanSpokenText(translated);
                     if (cleanTrans.isEmpty()) continue;
 
+                    final String textToDisplay = cleanText;
                     mainHandler.post(() -> {
                         if (!isLiveOcrRunning || epoch != liveOcrEpoch.get()) return;
-                        floatingManager.addTranslation(cleanText, cleanTrans);
+                        floatingManager.addTranslation(textToDisplay, cleanTrans);
                         floatingManager.updateStatus("Live OCR: Đang theo dõi...", Color.parseColor("#10B981"));
                     });
 

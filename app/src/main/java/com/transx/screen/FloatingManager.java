@@ -200,7 +200,8 @@ public class FloatingManager {
                 PixelFormat.TRANSLUCENT
         );
 
-        regionSelectorView = new RegionSelectorView(context, new RegionSelectorView.OnRegionSelectedListener() {
+        regionSelectorView = new RegionSelectorView(context);
+        regionSelectorView.setListener(new RegionSelectorView.Listener() {
             @Override
             public void onRegionSelected(Rect region) {
                 hideRegionSelector();
@@ -208,7 +209,7 @@ public class FloatingManager {
             }
 
             @Override
-            public void onCancelled() {
+            public void onCancel() {
                 hideRegionSelector();
             }
         });
