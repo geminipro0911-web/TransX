@@ -1,4 +1,4 @@
-﻿package com.transx.screen.util;
+package com.transx.screen.util;
 
 public class Lang {
     public final String name;

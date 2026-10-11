@@ -1,4 +1,4 @@
-﻿package com.transx.screen;
+package com.transx.screen;
 
 import android.content.ClipData;
 import android.content.ClipboardManager;

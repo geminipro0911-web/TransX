@@ -1,4 +1,4 @@
-﻿package com.transx.screen.audio;
+package com.transx.screen.audio;
 
 import android.media.AudioAttributes;
 import android.media.AudioFormat;

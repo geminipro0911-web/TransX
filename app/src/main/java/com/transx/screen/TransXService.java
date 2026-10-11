@@ -1,4 +1,4 @@
-﻿package com.transx.screen;
+package com.transx.screen;
 
 import android.app.Notification;
 import android.app.NotificationChannel;

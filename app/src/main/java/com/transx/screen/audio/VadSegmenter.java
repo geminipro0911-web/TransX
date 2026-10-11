@@ -1,4 +1,4 @@
-﻿package com.transx.screen.audio;
+package com.transx.screen.audio;
 
 public class VadSegmenter {
     public interface Listener {

@@ -1,4 +1,4 @@
-﻿package com.transx.screen.speech;
+package com.transx.screen.speech;
 
 import android.content.Context;
 import android.media.MediaPlayer;

@@ -1,4 +1,4 @@
-﻿package com.transx.screen.util;
+package com.transx.screen.util;
 
 import android.content.Context;
 import android.content.SharedPreferences;
