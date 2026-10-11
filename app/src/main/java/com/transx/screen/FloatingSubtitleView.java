@@ -28,6 +28,7 @@ public class FloatingSubtitleView extends LinearLayout {
         void onToggleLiveOcr();
         void onCaptureScreen();
         void onSelectRegion();
+        void onClearHistory();
     }
 
     private final WindowManager wm;
@@ -134,6 +135,7 @@ public class FloatingSubtitleView extends LinearLayout {
         Button btnClear = createSmallButton("🗑️", v -> {
             itemsContainer.removeAllViews();
             tvStatus.setText("Đã xóa bản dịch.");
+            if (listener != null) listener.onClearHistory();
         });
         header.addView(btnClear);
 

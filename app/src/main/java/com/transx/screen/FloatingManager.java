@@ -31,6 +31,8 @@ public class FloatingManager {
         void onToggleTts();
         void onCaptureScreenRequested();
         void onRegionCropRequested(Rect region);
+        void onClearHistory();
+        void onCloseSubtitle();
     }
 
     private final FloatingListener listener;
@@ -129,6 +131,7 @@ public class FloatingManager {
             @Override
             public void onClose() {
                 hideSubtitle();
+                if (listener != null) listener.onCloseSubtitle();
             }
 
             @Override
@@ -154,6 +157,11 @@ public class FloatingManager {
             @Override
             public void onSelectRegion() {
                 showRegionSelector();
+            }
+
+            @Override
+            public void onClearHistory() {
+                if (listener != null) listener.onClearHistory();
             }
         });
 
