@@ -78,6 +78,14 @@ public class TransXService extends Service {
     private long lastFrameHash = 0;
     private String lastRecognizedText = "";
     private long lastOcrTime = 0;
+    private final java.util.Map<String, Boolean> recentTranslatedCache = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, Boolean>(100, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, Boolean> eldest) {
+                    return size() > 100;
+                }
+            }
+    );
 
     private final BroadcastReceiver screenStateReceiver = new BroadcastReceiver() {
         @Override
@@ -156,9 +164,18 @@ public class TransXService extends Service {
         // Start foreground immediately
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
-                if (!MODE_OCR.equals(currentMode) && "mic".equals(prefs.getAudioSource())) {
+                boolean needProjection = MODE_OCR.equals(currentMode) || MODE_BOTH.equals(currentMode) || "internal".equals(prefs.getAudioSource());
+                boolean needMic = (!MODE_OCR.equals(currentMode)) && "mic".equals(prefs.getAudioSource());
+
+                int type = 0;
+                if (needProjection) {
+                    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+                }
+                if (needMic) {
                     type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+                }
+                if (type == 0) {
+                    type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
                 }
                 startForeground(NOTIF_ID, buildNotification(), type);
             } else {
@@ -355,6 +372,15 @@ public class TransXService extends Service {
         return text.matches("(?i).*[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ].*");
     }
 
+    private boolean isAlreadyTranslated(String text, String srcLang) {
+        if (text == null || text.trim().isEmpty()) return true;
+        if (!"vi".equalsIgnoreCase(srcLang) && isLikelyVietnamese(text)) {
+            return true;
+        }
+        String norm = text.trim().toLowerCase();
+        return recentTranslatedCache.containsKey(norm);
+    }
+
     // ---------- VÒNG LẶP LIVE OCR LIÊN TỤC TRÊN MÀN HÌNH ----------
 
     private synchronized void startLiveOcr() {
@@ -443,13 +469,16 @@ public class TransXService extends Service {
 
                         for (OfflineOcrEngine.OcrBlock b : blocks) {
                             String cleanB = cleanOcrText(b.originalText, srcLang);
-                            // BỎ QUA nếu khối này là chữ tiếng Việt (bản dịch đã hiển thị trên màn hình)
-                            if (cleanB.isEmpty() || (!"vi".equalsIgnoreCase(srcLang) && isLikelyVietnamese(cleanB))) {
+                            // BỎ QUA nếu khối này là chữ tiếng Việt hoặc bản dịch đã hiển thị trên màn hình
+                            if (cleanB.isEmpty() || isAlreadyTranslated(cleanB, srcLang)) {
                                 continue;
                             }
 
                             String t = translationManager.translate(cleanB, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
                             b.translatedText = cleanSpokenText(t);
+                            if (b.translatedText != null && !b.translatedText.isEmpty()) {
+                                recentTranslatedCache.put(b.translatedText.trim().toLowerCase(), Boolean.TRUE);
+                            }
 
                             if (combinedOrig.length() > 0) combinedOrig.append(" ");
                             combinedOrig.append(cleanB);
@@ -495,8 +524,8 @@ public class TransXService extends Service {
                         continue;
                     }
 
-                    // Bỏ qua nếu nguồn không phải tiếng Việt nhưng OCR lại nhận dạng ra tiếng Việt
-                    if (!"vi".equalsIgnoreCase(srcLang) && isLikelyVietnamese(cleanText)) {
+                    // Bỏ qua nếu nguồn không phải tiếng Việt nhưng OCR lại nhận dạng ra tiếng Việt hoặc chữ vừa dịch
+                    if (isAlreadyTranslated(cleanText, srcLang)) {
                         Thread.sleep(200);
                         continue;
                     }
@@ -534,6 +563,7 @@ public class TransXService extends Service {
 
                     String cleanTrans = cleanSpokenText(translated);
                     if (cleanTrans.isEmpty()) continue;
+                    recentTranslatedCache.put(cleanTrans.toLowerCase(), Boolean.TRUE);
 
                     final String textToDisplay = cleanText;
                     mainHandler.post(() -> {
@@ -719,11 +749,14 @@ public class TransXService extends Service {
 
                     for (OfflineOcrEngine.OcrBlock b : blocks) {
                         String cleanB = cleanOcrText(b.originalText, srcLang);
-                        if (cleanB.isEmpty() || (!"vi".equalsIgnoreCase(srcLang) && isLikelyVietnamese(cleanB))) {
+                        if (cleanB.isEmpty() || isAlreadyTranslated(cleanB, srcLang)) {
                             continue;
                         }
                         String t = translationManager.translate(cleanB, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
                         b.translatedText = cleanSpokenText(t);
+                        if (b.translatedText != null && !b.translatedText.isEmpty()) {
+                            recentTranslatedCache.put(b.translatedText.trim().toLowerCase(), Boolean.TRUE);
+                        }
 
                         if (fullOrig.length() > 0) fullOrig.append(" ");
                         fullOrig.append(cleanB);
@@ -765,7 +798,7 @@ public class TransXService extends Service {
 
                 String cleanRec = cleanOcrText(recognized, srcLang);
                 if (cleanRec.isEmpty()) return;
-                if (!"vi".equalsIgnoreCase(srcLang) && isLikelyVietnamese(cleanRec)) return;
+                if (isAlreadyTranslated(cleanRec, srcLang)) return;
 
                 mainHandler.post(() -> floatingManager.updateStatus("Đang dịch chữ OCR...", Color.parseColor("#38BDF8")));
 
@@ -773,6 +806,9 @@ public class TransXService extends Service {
 
                 if (epoch != liveOcrEpoch.get()) return;
                 String cleanTrans = cleanSpokenText(translated);
+                if (!cleanTrans.isEmpty()) {
+                    recentTranslatedCache.put(cleanTrans.toLowerCase(), Boolean.TRUE);
+                }
 
                 mainHandler.post(() -> {
                     floatingManager.addTranslation(cleanRec, cleanTrans);

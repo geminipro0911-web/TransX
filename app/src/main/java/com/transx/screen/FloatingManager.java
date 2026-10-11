@@ -59,6 +59,13 @@ public class FloatingManager {
         if (subtitleView != null) {
             subtitleView.applyMode(mode);
         }
+        boolean isOcrActive = "mode_ocr".equals(mode) || "mode_both".equals(mode);
+        if (!isOcrActive) {
+            hideInPlaceOverlay();
+            if (subtitleView != null) {
+                subtitleView.setVisibility(View.VISIBLE);
+            }
+        }
     }
 
     public void setLiveOcrState(boolean isRunning) {
@@ -70,7 +77,8 @@ public class FloatingManager {
     public void showAll() {
         showBubble();
         showSubtitle();
-        if (new com.transx.screen.util.Prefs(context).isInPlaceMode()) {
+        boolean isOcrActive = "mode_ocr".equals(mode) || "mode_both".equals(mode);
+        if (isOcrActive && new com.transx.screen.util.Prefs(context).isInPlaceMode()) {
             showInPlaceOverlay();
             if (subtitleView != null) {
                 subtitleView.setVisibility(View.GONE);
@@ -248,8 +256,7 @@ public class FloatingManager {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 layoutType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                        | WindowManager.LayoutParams.FLAG_SECURE,
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
         );
 
