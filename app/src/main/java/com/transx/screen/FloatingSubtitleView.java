@@ -12,7 +12,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
-import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -31,10 +30,10 @@ public class FloatingSubtitleView extends LinearLayout {
     private final WindowManager.LayoutParams params;
     private final SubtitleActionListener listener;
 
-    private final TextView tvStatus;
-    private final LinearLayout itemsContainer;
-    private final ScrollView scrollView;
-    private final Button btnTts;
+    private TextView tvStatus;
+    private LinearLayout itemsContainer;
+    private ScrollView scrollView;
+    private Button btnTts;
     private boolean ttsMuted = false;
 
     private float initialTouchX, initialTouchY;
@@ -58,6 +57,19 @@ public class FloatingSubtitleView extends LinearLayout {
         bg.setStroke(dp(1), Color.parseColor("#334155"));
         setBackground(bg);
 
+        // Pre-create member views
+        tvStatus = new TextView(context);
+        tvStatus.setText("Sẵn sàng nghe...");
+        tvStatus.setTextColor(Color.parseColor("#94A3B8"));
+        tvStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+
+        itemsContainer = new LinearLayout(context);
+        itemsContainer.setOrientation(VERTICAL);
+
+        scrollView = new ScrollView(context);
+        scrollView.setFillViewport(true);
+        scrollView.addView(itemsContainer);
+
         // Header (Drag zone)
         LinearLayout header = new LinearLayout(context);
         header.setOrientation(HORIZONTAL);
@@ -72,20 +84,23 @@ public class FloatingSubtitleView extends LinearLayout {
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.0f);
         header.addView(tvTitle, titleLp);
 
-        btnTts = createSmallButton("🔊", v -> {
+        btnTts = createSmallButton("🔊");
+        btnTts.setOnClickListener(v -> {
             ttsMuted = !ttsMuted;
             btnTts.setText(ttsMuted ? "🔇" : "🔊");
             if (listener != null) listener.onToggleTts();
         });
         header.addView(btnTts);
 
-        Button btnClear = createSmallButton("🗑️", v -> {
+        Button btnClear = createSmallButton("🗑️");
+        btnClear.setOnClickListener(v -> {
             itemsContainer.removeAllViews();
             tvStatus.setText("Sẵn sàng nghe...");
         });
         header.addView(btnClear);
 
-        Button btnClose = createSmallButton("✖", v -> {
+        Button btnClose = createSmallButton("✖");
+        btnClose.setOnClickListener(v -> {
             if (listener != null) listener.onClose();
         });
         header.addView(btnClose);
@@ -111,15 +126,9 @@ public class FloatingSubtitleView extends LinearLayout {
         });
 
         // Content ScrollView
-        scrollView = new ScrollView(context);
-        scrollView.setFillViewport(true);
         LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1.0f);
         scrollLp.topMargin = dp(4);
         scrollLp.bottomMargin = dp(4);
-
-        itemsContainer = new LinearLayout(context);
-        itemsContainer.setOrientation(VERTICAL);
-        scrollView.addView(itemsContainer);
         addView(scrollView, scrollLp);
 
         // Bottom Status Line + Resize grip
@@ -127,10 +136,6 @@ public class FloatingSubtitleView extends LinearLayout {
         footer.setOrientation(HORIZONTAL);
         footer.setGravity(Gravity.CENTER_VERTICAL);
 
-        tvStatus = new TextView(context);
-        tvStatus.setText("Sẵn sàng nghe...");
-        tvStatus.setTextColor(Color.parseColor("#94A3B8"));
-        tvStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.0f);
         footer.addView(tvStatus, statusLp);
 
@@ -201,7 +206,7 @@ public class FloatingSubtitleView extends LinearLayout {
         });
     }
 
-    private Button createSmallButton(String text, OnClickListener cl) {
+    private Button createSmallButton(String text) {
         Button b = new Button(getContext());
         b.setText(text);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
@@ -211,7 +216,6 @@ public class FloatingSubtitleView extends LinearLayout {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(36), dp(32));
         lp.leftMargin = dp(2);
         b.setLayoutParams(lp);
-        b.setOnClickListener(cl);
         return b;
     }
 
