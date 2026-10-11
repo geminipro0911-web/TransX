@@ -63,6 +63,14 @@ public class TransXService extends Service {
     private ExecutorService processPool;
     private boolean isListening = false;
 
+    // Vòng lặp quét OCR Live liên tục
+    private volatile boolean isLiveOcrRunning = false;
+    private Thread liveOcrThread;
+    private Rect liveScanRegion = null;
+    private long lastFrameHash = 0;
+    private String lastRecognizedText = "";
+    private long lastOcrTime = 0;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -97,8 +105,8 @@ public class TransXService extends Service {
         String title = "TransX Screen đang chạy";
         String desc = "Dịch thời gian thực trên màn hình";
         if (MODE_OCR.equals(currentMode)) {
-            title = "TransX - Dịch Màn Hình (OCR Offline)";
-            desc = "Sẵn sàng quét chữ màn hình không cần mạng";
+            title = "TransX - Dịch Màn Hình (Live OCR Offline)";
+            desc = "Đang tự động quét và dịch chữ trên màn hình";
         } else if (MODE_STT.equals(currentMode)) {
             title = "TransX - Dịch Giọng Nói (Live STT)";
             desc = "Đang nhận dạng âm thanh thời gian thực";
@@ -148,6 +156,11 @@ public class TransXService extends Service {
                 }
 
                 @Override
+                public void onToggleLiveOcr() {
+                    toggleLiveOcr();
+                }
+
+                @Override
                 public void onStopService() {
                     stopSelf();
                 }
@@ -166,6 +179,12 @@ public class TransXService extends Service {
 
                 @Override
                 public void onRegionCropRequested(Rect region) {
+                    liveScanRegion = region;
+                    Toast.makeText(TransXService.this, "Đã khóa vùng quét Live!", Toast.LENGTH_SHORT).show();
+                    if (!isLiveOcrRunning) {
+                        startLiveOcr();
+                    }
+                    // Chạy quét ngay lập tức vùng vừa chọn
                     captureAndTranslateRegion(region);
                 }
             });
@@ -198,28 +217,27 @@ public class TransXService extends Service {
             }
         }
 
-        // 1. Chức năng OCR Màn hình (Offline)
+        if (ttsPlayer == null) {
+            ttsPlayer = new TtsPlayer(this, mute -> {
+                if (capturer != null) {
+                    capturer.setMuted(mute);
+                }
+            });
+        }
+
+        // 1. Khởi động Screen Capturer & Tự động quét Live OCR
         if (needOcr) {
             if (projection != null && screenCapturer == null) {
                 DisplayMetrics dm = getResources().getDisplayMetrics();
                 screenCapturer = new ScreenCapturer(projection, dm.widthPixels, dm.heightPixels, dm.densityDpi);
                 screenCapturer.start();
             }
-            if (!needAudio) {
-                floatingManager.updateStatus("Chế độ OCR Offline: Chạm 📷 hoặc 🔲 để dịch chữ", Color.parseColor("#38BDF8"));
-            }
+            startLiveOcr();
         }
 
         // 2. Chức năng Dịch Giọng Nói STT
         if (needAudio) {
             boolean useInternal = "internal".equals(prefs.getAudioSource());
-            if (ttsPlayer == null) {
-                ttsPlayer = new TtsPlayer(this, mute -> {
-                    if (capturer != null) {
-                        capturer.setMuted(mute);
-                    }
-                });
-            }
 
             if (vad == null) {
                 vad = new VadSegmenter(this::onSpeechSegmentDetected);
@@ -241,6 +259,127 @@ public class TransXService extends Service {
             }
         }
     }
+
+    // ---------- VÒNG LẶP LIVE OCR LIÊN TỤC TRÊN MÀN HÌNH ----------
+
+    private synchronized void startLiveOcr() {
+        if (isLiveOcrRunning) return;
+        isLiveOcrRunning = true;
+        if (floatingManager != null) {
+            floatingManager.setLiveOcrState(true);
+            floatingManager.updateStatus("Live OCR: Đang tự động quét...", Color.parseColor("#10B981"));
+        }
+
+        liveOcrThread = new Thread(() -> {
+            Log.i(TAG, "Live OCR background loop started");
+            while (isLiveOcrRunning) {
+                try {
+                    long now = System.currentTimeMillis();
+                    // Giãn cách tối thiểu giữa 2 lần quét: 300ms
+                    if (now - lastOcrTime < 300) {
+                        Thread.sleep(80);
+                        continue;
+                    }
+
+                    if (screenCapturer == null) {
+                        Thread.sleep(200);
+                        continue;
+                    }
+
+                    // Chụp frame mới nhất (toàn màn hình hoặc theo vùng đã khóa)
+                    Bitmap bmp = screenCapturer.captureLatestFrame(liveScanRegion);
+                    if (bmp == null) {
+                        Thread.sleep(120);
+                        continue;
+                    }
+
+                    // 1. Tính hash 8x8 cực nhẹ (<0.5ms) để kiểm tra màn hình có thay đổi không
+                    long currentHash = ScreenCapturer.averageHash(bmp);
+                    int diff = ScreenCapturer.hamming(lastFrameHash, currentHash);
+                    lastFrameHash = currentHash;
+
+                    // Nếu màn hình không có chuyển động chữ mới (diff < 3) và đã có text cũ -> bỏ qua
+                    if (diff < 3 && !lastRecognizedText.isEmpty()) {
+                        bmp.recycle();
+                        Thread.sleep(250);
+                        continue;
+                    }
+
+                    lastOcrTime = System.currentTimeMillis();
+
+                    // 2. Chạy nhận dạng chữ hoàn toàn Offline qua Google ML Kit (~30-50ms)
+                    String srcLang = prefs.getSourceLang();
+                    String recognized = OfflineOcrEngine.recognizeText(bmp, srcLang);
+                    bmp.recycle();
+
+                    if (recognized == null || recognized.trim().isEmpty()) {
+                        Thread.sleep(200);
+                        continue;
+                    }
+
+                    // Làm sạch chuỗi để so sánh
+                    String cleanText = recognized.trim().replaceAll("\\s+", " ");
+                    if (cleanText.equalsIgnoreCase(lastRecognizedText)) {
+                        Thread.sleep(200);
+                        continue;
+                    }
+                    lastRecognizedText = cleanText;
+
+                    // 3. Có chữ mới xuất hiện trên màn hình -> Dịch ngay qua Edge API
+                    mainHandler.post(() -> floatingManager.updateStatus("Live OCR: Đang dịch...", Color.parseColor("#38BDF8")));
+
+                    String tgtLang = prefs.getTargetLang();
+                    String translated = translator.translateSingle(cleanText, srcLang, tgtLang);
+
+                    mainHandler.post(() -> {
+                        String label = (liveScanRegion != null) ? "Vùng quét" : "Màn hình";
+                        floatingManager.addTranslation("[" + label + "] " + cleanText, translated);
+                        floatingManager.updateStatus("Live OCR: Đang theo dõi...", Color.parseColor("#10B981"));
+                    });
+
+                    // Đọc phát âm nếu bật TTS
+                    if (prefs.isTtsEnabled() && ttsPlayer != null) {
+                        Lang targetLang = Lang.findByEdgeCode(tgtLang);
+                        ttsPlayer.speak(translated, targetLang.googleSttCode);
+                    }
+
+                    Thread.sleep(250);
+
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Throwable e) {
+                    Log.e(TAG, "Live OCR loop error: " + e.getMessage());
+                    try { Thread.sleep(300); } catch (Exception ignored) {}
+                }
+            }
+            Log.i(TAG, "Live OCR background loop stopped");
+        }, "live-ocr-loop");
+
+        liveOcrThread.setPriority(Thread.NORM_PRIORITY);
+        liveOcrThread.start();
+    }
+
+    private synchronized void stopLiveOcr() {
+        isLiveOcrRunning = false;
+        if (floatingManager != null) {
+            floatingManager.setLiveOcrState(false);
+            floatingManager.updateStatus("Live OCR: Đã tạm dừng", Color.parseColor("#64748B"));
+        }
+        if (liveOcrThread != null) {
+            liveOcrThread.interrupt();
+            liveOcrThread = null;
+        }
+    }
+
+    private void toggleLiveOcr() {
+        if (isLiveOcrRunning) {
+            stopLiveOcr();
+        } else {
+            startLiveOcr();
+        }
+    }
+
+    // ---------- VÒNG LẶP DỊCH GIỌNG NÓI STT ----------
 
     private void onSpeechSegmentDetected(float[] pcmSamples) {
         floatingManager.updateStatus("Đang nhận dạng...", Color.parseColor("#F59E0B"));
@@ -291,7 +430,7 @@ public class TransXService extends Service {
 
         floatingManager.hideTemporarily(() -> {
             Bitmap bmp = screenCapturer.captureScreen();
-            processOcrBitmap(bmp, "Toàn màn hình");
+            processSingleOcrBitmap(bmp, "Chụp nhanh");
         });
     }
 
@@ -302,10 +441,10 @@ public class TransXService extends Service {
         }
 
         Bitmap bmp = screenCapturer.captureRegion(region);
-        processOcrBitmap(bmp, "Vùng chọn");
+        processSingleOcrBitmap(bmp, "Vùng chọn");
     }
 
-    private void processOcrBitmap(Bitmap bitmap, String sourceLabel) {
+    private void processSingleOcrBitmap(Bitmap bitmap, String sourceLabel) {
         if (bitmap == null) {
             floatingManager.updateStatus("Không lấy được hình ảnh màn hình", Color.parseColor("#EF4444"));
             return;
@@ -316,7 +455,6 @@ public class TransXService extends Service {
         processPool.execute(() -> {
             try {
                 String srcLang = prefs.getSourceLang();
-                // Nhận dạng hoàn toàn Offline trên máy
                 String recognized = OfflineOcrEngine.recognizeText(bitmap, srcLang);
                 bitmap.recycle();
 
@@ -376,6 +514,7 @@ public class TransXService extends Service {
 
     private void stopPipeline() {
         stopAudioOnly();
+        stopLiveOcr();
         if (screenCapturer != null) {
             screenCapturer.stop();
             screenCapturer = null;

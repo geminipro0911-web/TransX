@@ -25,6 +25,7 @@ public class FloatingSubtitleView extends LinearLayout {
         void onClose();
         void onToggleTts();
         void onToggleListening();
+        void onToggleLiveOcr();
         void onCaptureScreen();
         void onSelectRegion();
     }
@@ -38,12 +39,15 @@ public class FloatingSubtitleView extends LinearLayout {
     private LinearLayout itemsContainer;
     private ScrollView scrollView;
 
+    private Button btnLiveOcr;
     private Button btnCapture;
     private Button btnCrop;
     private Button btnListen;
     private Button btnTts;
+
     private boolean ttsMuted = false;
     private boolean isListening = true;
+    private boolean isLiveOcrRunning = true;
 
     private float initialTouchX, initialTouchY;
     private int initialX, initialY;
@@ -92,45 +96,48 @@ public class FloatingSubtitleView extends LinearLayout {
         header.addView(tvTitle, titleLp);
 
         // Buttons
-        btnCapture = createSmallButton("📷");
-        btnCapture.setOnClickListener(v -> {
-            Toast.makeText(getContext(), "Đang chụp & quét chữ màn hình...", Toast.LENGTH_SHORT).show();
-            if (listener != null) listener.onCaptureScreen();
+        btnLiveOcr = createTextButton("⏸ Live", v -> {
+            isLiveOcrRunning = !isLiveOcrRunning;
+            btnLiveOcr.setText(isLiveOcrRunning ? "⏸ Live" : "▶ Live");
+            String msg = isLiveOcrRunning ? "Đã bật tự động quét màn hình liên tục" : "Đã tạm dừng quét màn hình";
+            Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
+            if (listener != null) listener.onToggleLiveOcr();
         });
-        header.addView(btnCapture);
+        header.addView(btnLiveOcr);
 
-        btnCrop = createSmallButton("🔲");
-        btnCrop.setOnClickListener(v -> {
-            Toast.makeText(getContext(), "Kéo chọn vùng muốn dịch", Toast.LENGTH_SHORT).show();
+        btnCrop = createSmallButton("🔲", v -> {
+            Toast.makeText(getContext(), "Kéo chọn vùng muốn quét Live", Toast.LENGTH_SHORT).show();
             if (listener != null) listener.onSelectRegion();
         });
         header.addView(btnCrop);
 
-        btnListen = createSmallButton("⏸");
-        btnListen.setOnClickListener(v -> {
+        btnCapture = createSmallButton("📷", v -> {
+            Toast.makeText(getContext(), "Quét màn hình 1 lần...", Toast.LENGTH_SHORT).show();
+            if (listener != null) listener.onCaptureScreen();
+        });
+        header.addView(btnCapture);
+
+        btnListen = createSmallButton("⏸", v -> {
             isListening = !isListening;
             btnListen.setText(isListening ? "⏸" : "▶");
             if (listener != null) listener.onToggleListening();
         });
         header.addView(btnListen);
 
-        btnTts = createSmallButton("🔊");
-        btnTts.setOnClickListener(v -> {
+        btnTts = createSmallButton("🔊", v -> {
             ttsMuted = !ttsMuted;
             btnTts.setText(ttsMuted ? "🔇" : "🔊");
             if (listener != null) listener.onToggleTts();
         });
         header.addView(btnTts);
 
-        Button btnClear = createSmallButton("🗑️");
-        btnClear.setOnClickListener(v -> {
+        Button btnClear = createSmallButton("🗑️", v -> {
             itemsContainer.removeAllViews();
             tvStatus.setText("Đã xóa bản dịch.");
         });
         header.addView(btnClear);
 
-        Button btnClose = createSmallButton("✖");
-        btnClose.setOnClickListener(v -> {
+        Button btnClose = createSmallButton("✖", v -> {
             if (listener != null) listener.onClose();
         });
         header.addView(btnClose);
@@ -203,27 +210,35 @@ public class FloatingSubtitleView extends LinearLayout {
 
     public void applyMode(String mode) {
         if ("mode_ocr".equals(mode)) {
-            tvTitle.setText("TransX - Dịch Màn Hình (OCR)");
-            tvStatus.setText("Sẵn sàng: Bấm 📷 hoặc 🔲 để dịch chữ offline");
-            btnCapture.setVisibility(VISIBLE);
+            tvTitle.setText("Live OCR");
+            tvStatus.setText("Đang tự động quét màn hình liên tục...");
+            btnLiveOcr.setVisibility(VISIBLE);
             btnCrop.setVisibility(VISIBLE);
+            btnCapture.setVisibility(VISIBLE);
             btnListen.setVisibility(GONE);
-            btnTts.setVisibility(GONE);
+            btnTts.setVisibility(VISIBLE);
         } else if ("mode_stt".equals(mode)) {
-            tvTitle.setText("TransX - Dịch Giọng Nói (Live STT)");
-            tvStatus.setText("Đang lắng nghe âm thanh (Live STT)...");
-            btnCapture.setVisibility(GONE);
+            tvTitle.setText("Live STT");
+            tvStatus.setText("Đang lắng nghe âm thanh trực tiếp...");
+            btnLiveOcr.setVisibility(GONE);
             btnCrop.setVisibility(GONE);
+            btnCapture.setVisibility(GONE);
             btnListen.setVisibility(VISIBLE);
             btnTts.setVisibility(VISIBLE);
         } else {
-            tvTitle.setText("TransX Screen (OCR + STT)");
-            tvStatus.setText("Sẵn sàng nghe và dịch màn hình...");
-            btnCapture.setVisibility(VISIBLE);
+            tvTitle.setText("Live TransX");
+            tvStatus.setText("Đang quét màn hình & nghe âm thanh...");
+            btnLiveOcr.setVisibility(VISIBLE);
             btnCrop.setVisibility(VISIBLE);
+            btnCapture.setVisibility(VISIBLE);
             btnListen.setVisibility(VISIBLE);
             btnTts.setVisibility(VISIBLE);
         }
+    }
+
+    public void setLiveOcrState(boolean isRunning) {
+        this.isLiveOcrRunning = isRunning;
+        post(() -> btnLiveOcr.setText(isRunning ? "⏸ Live" : "▶ Live"));
     }
 
     public void setStatus(String text) {
@@ -265,7 +280,25 @@ public class FloatingSubtitleView extends LinearLayout {
         });
     }
 
-    private Button createSmallButton(String text) {
+    private Button createTextButton(String text, OnClickListener listener) {
+        Button b = new Button(getContext());
+        b.setText(text);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        b.setPadding(dp(6), 0, dp(6), 0);
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(Color.parseColor("#1E293B"));
+        gd.setCornerRadius(dp(8));
+        gd.setStroke(dp(1), Color.parseColor("#38BDF8"));
+        b.setBackground(gd);
+        b.setTextColor(Color.parseColor("#38BDF8"));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, dp(32));
+        lp.leftMargin = dp(2);
+        b.setLayoutParams(lp);
+        b.setOnClickListener(listener);
+        return b;
+    }
+
+    private Button createSmallButton(String text, OnClickListener listener) {
         Button b = new Button(getContext());
         b.setText(text);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
@@ -275,6 +308,7 @@ public class FloatingSubtitleView extends LinearLayout {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(34), dp(32));
         lp.leftMargin = dp(2);
         b.setLayoutParams(lp);
+        b.setOnClickListener(listener);
         return b;
     }
 

@@ -26,6 +26,7 @@ public class FloatingManager {
 
     public interface FloatingListener {
         void onToggleListening();
+        void onToggleLiveOcr();
         void onStopService();
         void onToggleTts();
         void onCaptureScreenRequested();
@@ -48,6 +49,12 @@ public class FloatingManager {
         }
         if (subtitleView != null) {
             subtitleView.applyMode(mode);
+        }
+    }
+
+    public void setLiveOcrState(boolean isRunning) {
+        if (subtitleView != null) {
+            subtitleView.setLiveOcrState(isRunning);
         }
     }
 
@@ -82,7 +89,7 @@ public class FloatingManager {
             @Override
             public void onBubbleLongClick() {
                 if ("mode_ocr".equals(mode)) {
-                    if (listener != null) listener.onCaptureScreenRequested();
+                    if (listener != null) listener.onToggleLiveOcr();
                 } else {
                     if (listener != null) listener.onToggleListening();
                 }
@@ -132,6 +139,11 @@ public class FloatingManager {
             @Override
             public void onToggleListening() {
                 if (listener != null) listener.onToggleListening();
+            }
+
+            @Override
+            public void onToggleLiveOcr() {
+                if (listener != null) listener.onToggleLiveOcr();
             }
 
             @Override
