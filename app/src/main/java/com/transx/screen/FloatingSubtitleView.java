@@ -24,6 +24,7 @@ public class FloatingSubtitleView extends LinearLayout {
     public interface SubtitleActionListener {
         void onClose();
         void onToggleTts();
+        void onToggleListening();
         void onCaptureScreen();
         void onSelectRegion();
     }
@@ -32,17 +33,23 @@ public class FloatingSubtitleView extends LinearLayout {
     private final WindowManager.LayoutParams params;
     private final SubtitleActionListener listener;
 
+    private TextView tvTitle;
     private TextView tvStatus;
     private LinearLayout itemsContainer;
     private ScrollView scrollView;
+
+    private Button btnCapture;
+    private Button btnCrop;
+    private Button btnListen;
     private Button btnTts;
     private boolean ttsMuted = false;
+    private boolean isListening = true;
 
     private float initialTouchX, initialTouchY;
     private int initialX, initialY;
     private int initialWidth, initialHeight;
 
-    public FloatingSubtitleView(Context context, WindowManager wm, WindowManager.LayoutParams params, SubtitleActionListener listener) {
+    public FloatingSubtitleView(Context context, WindowManager wm, WindowManager.LayoutParams params, String mode, SubtitleActionListener listener) {
         super(context);
         this.wm = wm;
         this.params = params;
@@ -61,7 +68,6 @@ public class FloatingSubtitleView extends LinearLayout {
 
         // Pre-create member views
         tvStatus = new TextView(context);
-        tvStatus.setText("Sẵn sàng nghe & dịch...");
         tvStatus.setTextColor(Color.parseColor("#94A3B8"));
         tvStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
 
@@ -78,28 +84,35 @@ public class FloatingSubtitleView extends LinearLayout {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(0, 0, 0, dp(4));
 
-        TextView tvTitle = new TextView(context);
-        tvTitle.setText("TransX");
+        tvTitle = new TextView(context);
         tvTitle.setTextColor(Color.parseColor("#38BDF8")); // Cyan
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         tvTitle.setTypeface(tvTitle.getTypeface(), Typeface.BOLD);
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.0f);
         header.addView(tvTitle, titleLp);
 
-        // Action Buttons: OCR Screen, OCR Region, TTS, Clear, Close
-        Button btnCapture = createSmallButton("📷");
+        // Buttons
+        btnCapture = createSmallButton("📷");
         btnCapture.setOnClickListener(v -> {
-            Toast.makeText(getContext(), "Đang chụp & dịch màn hình...", Toast.LENGTH_SHORT).show();
+            Toast.makeText(getContext(), "Đang chụp & quét chữ màn hình...", Toast.LENGTH_SHORT).show();
             if (listener != null) listener.onCaptureScreen();
         });
         header.addView(btnCapture);
 
-        Button btnCrop = createSmallButton("🔲");
+        btnCrop = createSmallButton("🔲");
         btnCrop.setOnClickListener(v -> {
             Toast.makeText(getContext(), "Kéo chọn vùng muốn dịch", Toast.LENGTH_SHORT).show();
             if (listener != null) listener.onSelectRegion();
         });
         header.addView(btnCrop);
+
+        btnListen = createSmallButton("⏸");
+        btnListen.setOnClickListener(v -> {
+            isListening = !isListening;
+            btnListen.setText(isListening ? "⏸" : "▶");
+            if (listener != null) listener.onToggleListening();
+        });
+        header.addView(btnListen);
 
         btnTts = createSmallButton("🔊");
         btnTts.setOnClickListener(v -> {
@@ -122,9 +135,11 @@ public class FloatingSubtitleView extends LinearLayout {
         });
         header.addView(btnClose);
 
+        applyMode(mode);
+
         addView(header);
 
-        // Header touch to drag: uses TOP|START coordinates (dx and dy directly add)
+        // Header drag: TOP|START direct delta add
         header.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
@@ -150,7 +165,7 @@ public class FloatingSubtitleView extends LinearLayout {
         scrollLp.bottomMargin = dp(4);
         addView(scrollView, scrollLp);
 
-        // Bottom Status Line + Resize grip
+        // Footer status + Resize grip
         LinearLayout footer = new LinearLayout(context);
         footer.setOrientation(HORIZONTAL);
         footer.setGravity(Gravity.CENTER_VERTICAL);
@@ -184,6 +199,31 @@ public class FloatingSubtitleView extends LinearLayout {
         footer.addView(resizeGrip);
 
         addView(footer);
+    }
+
+    public void applyMode(String mode) {
+        if ("mode_ocr".equals(mode)) {
+            tvTitle.setText("TransX - Dịch Màn Hình (OCR)");
+            tvStatus.setText("Sẵn sàng: Bấm 📷 hoặc 🔲 để dịch chữ offline");
+            btnCapture.setVisibility(VISIBLE);
+            btnCrop.setVisibility(VISIBLE);
+            btnListen.setVisibility(GONE);
+            btnTts.setVisibility(GONE);
+        } else if ("mode_stt".equals(mode)) {
+            tvTitle.setText("TransX - Dịch Giọng Nói (Live STT)");
+            tvStatus.setText("Đang lắng nghe âm thanh (Live STT)...");
+            btnCapture.setVisibility(GONE);
+            btnCrop.setVisibility(GONE);
+            btnListen.setVisibility(VISIBLE);
+            btnTts.setVisibility(VISIBLE);
+        } else {
+            tvTitle.setText("TransX Screen (OCR + STT)");
+            tvStatus.setText("Sẵn sàng nghe và dịch màn hình...");
+            btnCapture.setVisibility(VISIBLE);
+            btnCrop.setVisibility(VISIBLE);
+            btnListen.setVisibility(VISIBLE);
+            btnTts.setVisibility(VISIBLE);
+        }
     }
 
     public void setStatus(String text) {

@@ -20,6 +20,7 @@ public class FloatingBubbleView extends FrameLayout {
     private final WindowManager wm;
     private final WindowManager.LayoutParams params;
     private final OnBubbleClickListener listener;
+    private final TextView icon;
     private final View statusIndicator;
     private float initialTouchX, initialTouchY;
     private int initialX, initialY;
@@ -38,10 +39,10 @@ public class FloatingBubbleView extends FrameLayout {
         bg.setStroke(dp(2), Color.parseColor("#38BDF8"));
         setBackground(bg);
 
-        TextView icon = new TextView(context);
+        icon = new TextView(context);
         icon.setText("TX");
         icon.setTextColor(Color.WHITE);
-        icon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        icon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         icon.setTypeface(icon.getTypeface(), android.graphics.Typeface.BOLD);
         icon.setGravity(Gravity.CENTER);
         LayoutParams iconLp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
@@ -59,6 +60,12 @@ public class FloatingBubbleView extends FrameLayout {
         addView(statusIndicator, dotLp);
 
         setOnTouchListener(this::handleTouch);
+    }
+
+    public void setLabel(String text) {
+        if (icon != null) {
+            icon.setText(text);
+        }
     }
 
     public void setStatusColor(int color) {

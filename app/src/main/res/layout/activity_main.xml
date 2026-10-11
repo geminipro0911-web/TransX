@@ -18,7 +18,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:layout_marginBottom="20dp">
+            android:layout_marginBottom="16dp">
 
             <ImageView
                 android:layout_width="48dp"
@@ -44,7 +44,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Dịch STT &amp; TTS Google Cloud Realtime"
+                    android:text="Dịch Màn Hình OCR Offline &amp; Dịch Giọng Nói STT"
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
             </LinearLayout>
@@ -57,13 +57,13 @@
             app:cardCornerRadius="16dp"
             app:cardElevation="2dp"
             app:cardBackgroundColor="@color/card_bg"
-            android:layout_marginBottom="16dp">
+            android:layout_marginBottom="14dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:padding="14dp">
 
                 <TextView
                     android:id="@+id/tvStatus"
@@ -71,28 +71,83 @@
                     android:layout_height="wrap_content"
                     android:text="Trạng thái: Chưa khởi động"
                     android:textColor="@color/accent"
-                    android:textSize="15sp"
+                    android:textSize="14sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/tvPermissionInfo"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:text="• Cần cấp quyền: Cửa sổ nổi, Ghi âm"
+                    android:layout_marginTop="4dp"
+                    android:text="• Cần cấp quyền: Cửa sổ nổi, Quay màn hình"
                     android:textColor="@color/text_secondary"
-                    android:textSize="13sp" />
+                    android:textSize="12sp" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
-        <!-- Google Cloud API Card -->
+        <!-- Language Settings Card -->
         <androidx.cardview.widget.CardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             app:cardCornerRadius="16dp"
             app:cardElevation="2dp"
             app:cardBackgroundColor="@color/card_bg"
-            android:layout_marginBottom="16dp">
+            android:layout_marginBottom="14dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🌐 Ngôn ngữ dịch"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="8dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Ngôn ngữ nguồn (Gốc trên màn hình / giọng nói):"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <Spinner
+                    android:id="@+id/spinnerSourceLang"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="8dp"
+                    android:background="@drawable/edit_text_bg" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Ngôn ngữ đích (Bản dịch hiển thị):"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <Spinner
+                    android:id="@+id/spinnerTargetLang"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/edit_text_bg" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- FEATURE 1: OCR SCREEN TRANSLATION -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="2dp"
+            app:cardBackgroundColor="@color/card_bg"
+            android:layout_marginBottom="14dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -103,51 +158,40 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="🔑 Cấu hình Google Cloud API"
-                    android:textColor="@color/text_primary"
-                    android:textSize="16sp"
+                    android:text="📸 1. DỊCH MÀN HÌNH (OCR OFFLINE)"
+                    android:textColor="@color/accent"
+                    android:textSize="15sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="Nhập API Key để sử dụng Google STT và TTS Neural2 cao cấp."
+                    android:text="Nhận dạng chữ 100% Offline trên máy (Google ML Kit). Không cần API Key, không lo lỗi 403, dịch tức thì qua Edge API. Chụp cả màn hình hoặc khoanh vùng chữ."
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
 
-                <EditText
-                    android:id="@+id/etApiKey"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:background="@drawable/edit_text_bg"
-                    android:hint="Dán Google Cloud API Key tại đây..."
-                    android:textColorHint="#64748B"
-                    android:textColor="@color/text_primary"
-                    android:padding="12dp"
-                    android:textSize="14sp"
-                    android:inputType="textPassword" />
-
                 <Button
-                    android:id="@+id/btnSaveKey"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="Lưu &amp; Thử kết nối"
-                    android:backgroundTint="@color/primary"
+                    android:id="@+id/btnStartOcr"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="12dp"
+                    android:text="📸 BẬT DỊCH MÀN HÌNH (OCR OFFLINE)"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#0284C7"
                     android:textColor="@android:color/white" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
-        <!-- Translation & Audio Settings Card -->
+        <!-- FEATURE 2: SPEECH STT TRANSLATION -->
         <androidx.cardview.widget.CardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             app:cardCornerRadius="16dp"
             app:cardElevation="2dp"
             app:cardBackgroundColor="@color/card_bg"
-            android:layout_marginBottom="20dp">
+            android:layout_marginBottom="14dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -158,57 +202,65 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="⚙️ Cài đặt dịch &amp; Âm thanh"
+                    android:text="🎙️ 2. DỊCH GIỌNG NÓI / ÂM THANH (LIVE STT)"
+                    android:textColor="@color/accent"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Lắng nghe âm thanh máy hoặc micro, cắt câu ngắn 2.5s và nhận dạng giọng nói realtime qua Google Cloud STT."
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <!-- Google API Key for STT/TTS -->
+                <EditText
+                    android:id="@+id/etApiKey"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/edit_text_bg"
+                    android:hint="Google Cloud API Key (cho STT &amp; TTS)..."
+                    android:textColorHint="#64748B"
                     android:textColor="@color/text_primary"
-                    android:textSize="16sp"
-                    android:textStyle="bold"
-                    android:layout_marginBottom="12dp" />
+                    android:padding="10dp"
+                    android:textSize="13sp"
+                    android:inputType="textPassword" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Ngôn ngữ nói (Nguồn):"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="13sp" />
-
-                <Spinner
-                    android:id="@+id/spinnerSourceLang"
+                <LinearLayout
                     android:layout_width="match_parent"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="4dp"
-                    android:layout_marginBottom="10dp"
-                    android:background="@drawable/edit_text_bg" />
-
-                <TextView
-                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Ngôn ngữ dịch ra (Đích):"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="13sp" />
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp">
 
-                <Spinner
-                    android:id="@+id/spinnerTargetLang"
-                    android:layout_width="match_parent"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="4dp"
-                    android:layout_marginBottom="12dp"
-                    android:background="@drawable/edit_text_bg" />
+                    <Button
+                        android:id="@+id/btnSaveKey"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:text="Lưu &amp; Thử Key"
+                        android:textSize="12sp"
+                        android:backgroundTint="#475569"
+                        android:textColor="@android:color/white" />
+                </LinearLayout>
 
                 <!-- Audio Source Toggle -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
                     android:text="Nguồn thu âm thanh:"
                     android:textColor="@color/text_secondary"
-                    android:textSize="13sp" />
+                    android:textSize="12sp" />
 
                 <RadioGroup
                     android:id="@+id/rgAudioSource"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:layout_marginTop="4dp"
-                    android:layout_marginBottom="12dp">
+                    android:layout_marginTop="2dp"
+                    android:layout_marginBottom="8dp">
 
                     <RadioButton
                         android:id="@+id/rbInternalAudio"
@@ -222,7 +274,7 @@
                         android:id="@+id/rbMicAudio"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="16dp"
+                        android:layout_marginStart="14dp"
                         android:text="Microphone"
                         android:textColor="@color/text_primary" />
                 </RadioGroup>
@@ -232,30 +284,40 @@
                     android:id="@+id/switchTts"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Tự động đọc bản dịch (Google TTS)"
+                    android:text="Tự động phát âm thanh đọc bản dịch (TTS)"
                     android:textColor="@color/text_primary"
                     android:checked="true" />
 
+                <Button
+                    android:id="@+id/btnStartStt"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="12dp"
+                    android:text="🎙️ BẬT DỊCH GIỌNG NÓI (LIVE STT)"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="@color/primary"
+                    android:textColor="@android:color/white" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
-        <!-- Main Action Buttons -->
+        <!-- BOTH & STOP BUTTONS -->
         <Button
-            android:id="@+id/btnStart"
+            android:id="@+id/btnStartBoth"
             android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:text="BẬT NÚT DỊCH NỔI TRÊN MÀN HÌNH"
-            android:textSize="15sp"
+            android:layout_height="52dp"
+            android:text="⚡ BẬT CẢ HAI CHẾ ĐỘ (OCR + STT)"
+            android:textSize="14sp"
             android:textStyle="bold"
-            android:backgroundTint="@color/primary"
+            android:backgroundTint="#7C3AED"
             android:textColor="@android:color/white"
-            android:layout_marginBottom="12dp" />
+            android:layout_marginBottom="10dp" />
 
         <Button
             android:id="@+id/btnStop"
             android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:text="TẮT DỊCH VỤ DỊCH"
+            android:layout_height="48dp"
+            android:text="🛑 TẮT TOÀN BỘ DỊCH VỤ"
             android:textSize="14sp"
             android:backgroundTint="#334155"
             android:textColor="@color/danger"

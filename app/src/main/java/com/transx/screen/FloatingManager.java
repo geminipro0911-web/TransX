@@ -14,6 +14,7 @@ import com.transx.screen.ocr.RegionSelectorView;
 public class FloatingManager {
     private final Context context;
     private final WindowManager wm;
+    private String mode;
 
     private FloatingBubbleView bubbleView;
     private WindowManager.LayoutParams bubbleParams;
@@ -33,10 +34,21 @@ public class FloatingManager {
 
     private final FloatingListener listener;
 
-    public FloatingManager(Context context, FloatingListener listener) {
+    public FloatingManager(Context context, String mode, FloatingListener listener) {
         this.context = context;
         this.wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        this.mode = mode;
         this.listener = listener;
+    }
+
+    public void setMode(String mode) {
+        this.mode = mode;
+        if (bubbleView != null) {
+            bubbleView.setLabel("mode_ocr".equals(mode) ? "OCR" : ("mode_stt".equals(mode) ? "STT" : "TX"));
+        }
+        if (subtitleView != null) {
+            subtitleView.applyMode(mode);
+        }
     }
 
     public void showAll() {
@@ -69,9 +81,15 @@ public class FloatingManager {
 
             @Override
             public void onBubbleLongClick() {
-                if (listener != null) listener.onToggleListening();
+                if ("mode_ocr".equals(mode)) {
+                    if (listener != null) listener.onCaptureScreenRequested();
+                } else {
+                    if (listener != null) listener.onToggleListening();
+                }
             }
         });
+
+        bubbleView.setLabel("mode_ocr".equals(mode) ? "OCR" : ("mode_stt".equals(mode) ? "STT" : "TX"));
 
         try { wm.addView(bubbleView, bubbleParams); } catch (Exception ignored) {}
     }
@@ -96,12 +114,11 @@ public class FloatingManager {
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT
         );
-        // Định vị theo TOP|START để cử chỉ kéo di chuyển (drag) hoàn toàn trùng khớp với ngón tay
         subtitleParams.gravity = Gravity.TOP | Gravity.START;
         subtitleParams.x = Math.max(0, (screenW - initW) / 2);
         subtitleParams.y = Math.max(0, screenH - initH - dp(80));
 
-        subtitleView = new FloatingSubtitleView(context, wm, subtitleParams, new FloatingSubtitleView.SubtitleActionListener() {
+        subtitleView = new FloatingSubtitleView(context, wm, subtitleParams, mode, new FloatingSubtitleView.SubtitleActionListener() {
             @Override
             public void onClose() {
                 hideSubtitle();
@@ -110,6 +127,11 @@ public class FloatingManager {
             @Override
             public void onToggleTts() {
                 if (listener != null) listener.onToggleTts();
+            }
+
+            @Override
+            public void onToggleListening() {
+                if (listener != null) listener.onToggleListening();
             }
 
             @Override
@@ -166,7 +188,6 @@ public class FloatingManager {
     }
 
     public void hideTemporarily(Runnable action) {
-        // Ẩn tạm thời để chụp màn hình sạch không dính nút dịch
         if (bubbleView != null) bubbleView.setVisibility(View.INVISIBLE);
         if (subtitleView != null) subtitleView.setVisibility(View.INVISIBLE);
 

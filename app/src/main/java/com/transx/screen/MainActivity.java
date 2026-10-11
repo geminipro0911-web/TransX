@@ -33,7 +33,7 @@ import com.transx.screen.util.Prefs;
 
 public class MainActivity extends AppCompatActivity {
     private static final int REQ_OVERLAY = 101;
-    private static final int REQ_PERMS = 102;
+    private static final int REQ_PERMS_STT = 102;
     private static final int REQ_PROJECTION = 103;
 
     private Prefs prefs;
@@ -44,6 +44,8 @@ public class MainActivity extends AppCompatActivity {
     private Spinner spinnerTargetLang;
     private RadioGroup rgAudioSource;
     private SwitchMaterial switchTts;
+
+    private String pendingTargetMode = TransXService.MODE_BOTH;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -76,7 +78,6 @@ public class MainActivity extends AppCompatActivity {
         spinnerSourceLang.setAdapter(langAdapter);
         spinnerTargetLang.setAdapter(langAdapter);
 
-        // Set default selections
         for (int i = 0; i < Lang.ALL.length; i++) {
             if (Lang.ALL[i].edgeCode.equals(prefs.getSourceLang())) {
                 spinnerSourceLang.setSelection(i);
@@ -117,9 +118,19 @@ public class MainActivity extends AppCompatActivity {
         switchTts.setChecked(prefs.isTtsEnabled());
         switchTts.setOnCheckedChangeListener((b, isChecked) -> prefs.setTtsEnabled(isChecked));
 
-        Button btnStart = findViewById(R.id.btnStart);
-        btnStart.setOnClickListener(v -> startTranslationFlow());
+        // 1. Nút Bật Dịch Màn Hình (OCR Offline)
+        Button btnStartOcr = findViewById(R.id.btnStartOcr);
+        btnStartOcr.setOnClickListener(v -> startServiceWithMode(TransXService.MODE_OCR));
 
+        // 2. Nút Bật Dịch Giọng Nói (Live STT)
+        Button btnStartStt = findViewById(R.id.btnStartStt);
+        btnStartStt.setOnClickListener(v -> startServiceWithMode(TransXService.MODE_STT));
+
+        // 3. Nút Bật Cả Hai
+        Button btnStartBoth = findViewById(R.id.btnStartBoth);
+        btnStartBoth.setOnClickListener(v -> startServiceWithMode(TransXService.MODE_BOTH));
+
+        // 4. Nút Dừng Dịch Vụ
         Button btnStop = findViewById(R.id.btnStop);
         btnStop.setOnClickListener(v -> {
             stopService(new Intent(this, TransXService.class));
@@ -128,31 +139,65 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void startServiceWithMode(String mode) {
+        this.pendingTargetMode = mode;
+
+        // Kiểm tra quyền Cửa Sổ Nổi
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
+            startActivityForResult(intent, REQ_OVERLAY);
+            Toast.makeText(this, "Vui lòng cấp quyền Hiển thị trên ứng dụng khác", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        // Nếu chế độ có dịch giọng nói STT, kiểm tra quyền Microphone
+        if (!TransXService.MODE_OCR.equals(mode)) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, new String[]{
+                        Manifest.permission.RECORD_AUDIO,
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ? Manifest.permission.POST_NOTIFICATIONS : Manifest.permission.RECORD_AUDIO
+                }, REQ_PERMS_STT);
+                return;
+            }
+        }
+
+        // Yêu cầu MediaProjection nếu cần chụp màn hình OCR hoặc thu âm trong máy
+        boolean needProjection = TransXService.MODE_OCR.equals(mode) || TransXService.MODE_BOTH.equals(mode) || "internal".equals(prefs.getAudioSource());
+        if (needProjection) {
+            MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+            if (mpm != null) {
+                startActivityForResult(mpm.createScreenCaptureIntent(), REQ_PROJECTION);
+            } else {
+                startTransService(null, 0);
+            }
+        } else {
+            startTransService(null, 0);
+        }
+    }
+
     private void testAndSaveApiKey() {
         String key = etApiKey.getText().toString().trim();
         prefs.setGoogleApiKey(key);
 
         if (key.isEmpty()) {
-            Toast.makeText(this, "Đã xóa API Key. Ứng dụng sẽ dùng chế độ dự phòng", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Đã xóa API Key. STT/TTS sẽ dùng giọng mặc định máy", Toast.LENGTH_SHORT).show();
             return;
         }
 
         Toast.makeText(this, "Đang kiểm tra kết nối Google Cloud...", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             try {
-                // Test Google TTS
                 byte[] testAudio = GoogleSpeechClient.synthesize("Xin chào", "vi-VN-Neural2-A", "vi-VN", 1.0f, key);
                 boolean ttsOk = (testAudio != null && testAudio.length > 0);
 
-                // Test Edge Translation
                 String translated = new EdgeTranslator().translateSingle("Hello", "en", "vi");
                 boolean edgeOk = !translated.isEmpty();
 
                 runOnUiThread(() -> {
                     if (ttsOk && edgeOk) {
-                        Toast.makeText(this, "Kết nối Google Cloud & Edge API thành công!", Toast.LENGTH_LONG).show();
+                        Toast.makeText(this, "Google Cloud STT/TTS & Edge API kết nối thành công!", Toast.LENGTH_LONG).show();
                     } else {
-                        Toast.makeText(this, "Lưu thành công. Kiểm tra dịch: " + translated, Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, "Lưu thành công: " + translated, Toast.LENGTH_SHORT).show();
                     }
                 });
             } catch (Exception e) {
@@ -167,35 +212,11 @@ public class MainActivity extends AppCompatActivity {
         boolean overlayOk = (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) || Settings.canDrawOverlays(this);
         boolean micOk = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
 
-        StringBuilder sb = new StringBuilder("• Quyền hệ thống: ");
-        sb.append(overlayOk ? "Cửa sổ nổi [ĐÃ CẤP]" : "Cửa sổ nổi [CHƯA CẤP]");
+        StringBuilder sb = new StringBuilder("• Quyền: ");
+        sb.append(overlayOk ? "Cửa sổ nổi [✓]" : "Cửa sổ nổi [✕]");
         sb.append(" | ");
-        sb.append(micOk ? "Ghi âm [ĐÃ CẤP]" : "Ghi âm [CHƯA CẤP]");
+        sb.append(micOk ? "Microphone [✓]" : "Microphone [✕]");
         tvPermissionInfo.setText(sb.toString());
-    }
-
-    private void startTranslationFlow() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
-            startActivityForResult(intent, REQ_OVERLAY);
-            Toast.makeText(this, "Vui lòng cấp quyền Hiển thị trên ứng dụng khác", Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, new String[]{
-                    Manifest.permission.RECORD_AUDIO,
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ? Manifest.permission.POST_NOTIFICATIONS : Manifest.permission.RECORD_AUDIO
-            }, REQ_PERMS);
-            return;
-        }
-
-        MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-        if (mpm != null) {
-            startActivityForResult(mpm.createScreenCaptureIntent(), REQ_PROJECTION);
-        } else {
-            startTransService(null, 0);
-        }
     }
 
     @Override
@@ -207,8 +228,7 @@ public class MainActivity extends AppCompatActivity {
             if (resultCode == Activity.RESULT_OK && data != null) {
                 startTransService(data, resultCode);
             } else {
-                Toast.makeText(this, "Không có quyền quay màn hình, chuyển sang chế độ Mic ngoài", Toast.LENGTH_SHORT).show();
-                startTransService(null, 0);
+                Toast.makeText(this, "Chưa cấp quyền màn hình", Toast.LENGTH_SHORT).show();
             }
         }
     }
@@ -218,15 +238,19 @@ public class MainActivity extends AppCompatActivity {
         TransXService.pendingProjectionCode = projectionCode;
 
         Intent svc = new Intent(this, TransXService.class);
+        svc.putExtra(TransXService.EXTRA_MODE, pendingTargetMode);
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(svc);
         } else {
             startService(svc);
         }
 
-        tvStatus.setText("Trạng thái: Đang chạy nút dịch nổi trên màn hình");
-        Toast.makeText(this, "Đã bật TransX Screen!", Toast.LENGTH_SHORT).show();
-        finish(); // Cho phép người dùng ra ngoài sử dụng các app khác
+        String modeLabel = TransXService.MODE_OCR.equals(pendingTargetMode) ? "Dịch Màn Hình (OCR)" :
+                (TransXService.MODE_STT.equals(pendingTargetMode) ? "Dịch Giọng Nói (STT)" : "Dịch Màn Hình & Giọng Nói");
+        tvStatus.setText("Trạng thái: Đang chạy " + modeLabel);
+        Toast.makeText(this, "Đã bật " + modeLabel, Toast.LENGTH_SHORT).show();
+        finish();
     }
 
     @Override

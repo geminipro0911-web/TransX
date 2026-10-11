@@ -25,7 +25,7 @@ import androidx.core.app.NotificationCompat;
 
 import com.transx.screen.audio.InternalAudioCapturer;
 import com.transx.screen.audio.VadSegmenter;
-import com.transx.screen.ocr.GoogleVisionClient;
+import com.transx.screen.ocr.OfflineOcrEngine;
 import com.transx.screen.ocr.ScreenCapturer;
 import com.transx.screen.speech.EdgeTranslator;
 import com.transx.screen.speech.GoogleSpeechClient;
@@ -41,8 +41,15 @@ public class TransXService extends Service {
     private static final String CHANNEL_ID = "transx_screen_channel";
     private static final int NOTIF_ID = 2026;
 
+    public static final String EXTRA_MODE = "service_mode";
+    public static final String MODE_OCR = "mode_ocr";
+    public static final String MODE_STT = "mode_stt";
+    public static final String MODE_BOTH = "mode_both";
+
     public static Intent pendingProjectionData = null;
     public static int pendingProjectionCode = 0;
+
+    private String currentMode = MODE_BOTH;
 
     private Handler mainHandler;
     private Prefs prefs;
@@ -87,9 +94,19 @@ public class TransXService extends Service {
                 PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
+        String title = "TransX Screen đang chạy";
+        String desc = "Dịch thời gian thực trên màn hình";
+        if (MODE_OCR.equals(currentMode)) {
+            title = "TransX - Dịch Màn Hình (OCR Offline)";
+            desc = "Sẵn sàng quét chữ màn hình không cần mạng";
+        } else if (MODE_STT.equals(currentMode)) {
+            title = "TransX - Dịch Giọng Nói (Live STT)";
+            desc = "Đang nhận dạng âm thanh thời gian thực";
+        }
+
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("TransX Screen đang chạy")
-                .setContentText("Đang dịch giọng nói và màn hình")
+                .setContentTitle(title)
+                .setContentText(desc)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentIntent(pi)
                 .setOngoing(true)
@@ -98,11 +115,15 @@ public class TransXService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && intent.hasExtra(EXTRA_MODE)) {
+            currentMode = intent.getStringExtra(EXTRA_MODE);
+        }
+
         // Start foreground immediately
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
-                if ("mic".equals(prefs.getAudioSource())) {
+                if (!MODE_OCR.equals(currentMode) && "mic".equals(prefs.getAudioSource())) {
                     type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
                 }
                 startForeground(NOTIF_ID, buildNotification(), type);
@@ -120,10 +141,10 @@ public class TransXService extends Service {
 
         // Setup Floating HUD
         if (floatingManager == null) {
-            floatingManager = new FloatingManager(this, new FloatingManager.FloatingListener() {
+            floatingManager = new FloatingManager(this, currentMode, new FloatingManager.FloatingListener() {
                 @Override
                 public void onToggleListening() {
-                    togglePipeline();
+                    toggleSpeechPipeline();
                 }
 
                 @Override
@@ -149,6 +170,8 @@ public class TransXService extends Service {
                 }
             });
             floatingManager.showAll();
+        } else {
+            floatingManager.setMode(currentMode);
         }
 
         initPipeline();
@@ -156,7 +179,9 @@ public class TransXService extends Service {
     }
 
     private void initPipeline() {
-        boolean useInternal = "internal".equals(prefs.getAudioSource());
+        boolean needOcr = MODE_OCR.equals(currentMode) || MODE_BOTH.equals(currentMode);
+        boolean needAudio = MODE_STT.equals(currentMode) || MODE_BOTH.equals(currentMode);
+
         if (pendingProjectionData != null && projection == null) {
             try {
                 MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
@@ -173,31 +198,47 @@ public class TransXService extends Service {
             }
         }
 
-        // Khởi động bộ chụp màn hình OCR
-        if (projection != null && screenCapturer == null) {
-            DisplayMetrics dm = getResources().getDisplayMetrics();
-            screenCapturer = new ScreenCapturer(projection, dm.widthPixels, dm.heightPixels, dm.densityDpi);
-            screenCapturer.start();
+        // 1. Chức năng OCR Màn hình (Offline)
+        if (needOcr) {
+            if (projection != null && screenCapturer == null) {
+                DisplayMetrics dm = getResources().getDisplayMetrics();
+                screenCapturer = new ScreenCapturer(projection, dm.widthPixels, dm.heightPixels, dm.densityDpi);
+                screenCapturer.start();
+            }
+            if (!needAudio) {
+                floatingManager.updateStatus("Chế độ OCR Offline: Chạm 📷 hoặc 🔲 để dịch chữ", Color.parseColor("#38BDF8"));
+            }
         }
 
-        ttsPlayer = new TtsPlayer(this, mute -> {
-            if (capturer != null) {
-                capturer.setMuted(mute);
+        // 2. Chức năng Dịch Giọng Nói STT
+        if (needAudio) {
+            boolean useInternal = "internal".equals(prefs.getAudioSource());
+            if (ttsPlayer == null) {
+                ttsPlayer = new TtsPlayer(this, mute -> {
+                    if (capturer != null) {
+                        capturer.setMuted(mute);
+                    }
+                });
             }
-        });
 
-        vad = new VadSegmenter(this::onSpeechSegmentDetected);
-        capturer = new InternalAudioCapturer(projection, !useInternal, (samples, n) -> {
-            if (vad != null) {
-                vad.feed(samples, n);
+            if (vad == null) {
+                vad = new VadSegmenter(this::onSpeechSegmentDetected);
             }
-        });
 
-        if (capturer.start()) {
-            isListening = true;
-            floatingManager.updateStatus("Đang lắng nghe trực tiếp...", Color.parseColor("#10B981"));
-        } else {
-            floatingManager.updateStatus("Lỗi khởi động thu âm", Color.parseColor("#EF4444"));
+            if (capturer == null) {
+                capturer = new InternalAudioCapturer(projection, !useInternal, (samples, n) -> {
+                    if (vad != null) {
+                        vad.feed(samples, n);
+                    }
+                });
+            }
+
+            if (capturer.start()) {
+                isListening = true;
+                floatingManager.updateStatus("Đang lắng nghe âm thanh (Live STT)...", Color.parseColor("#10B981"));
+            } else {
+                floatingManager.updateStatus("Lỗi khởi động thu âm", Color.parseColor("#EF4444"));
+            }
         }
     }
 
@@ -212,7 +253,7 @@ public class TransXService extends Service {
 
                 String recognizedText = GoogleSpeechClient.recognize(pcmSamples, srcLang.googleSttCode, apiKey);
                 if (recognizedText == null || recognizedText.trim().isEmpty()) {
-                    mainHandler.post(() -> floatingManager.updateStatus("Đang lắng nghe...", Color.parseColor("#10B981")));
+                    mainHandler.post(() -> floatingManager.updateStatus("Đang lắng nghe trực tiếp...", Color.parseColor("#10B981")));
                     return;
                 }
 
@@ -226,23 +267,25 @@ public class TransXService extends Service {
                     floatingManager.updateStatus("Đang đọc...", Color.parseColor("#818CF8"));
                 });
 
-                Lang targetLang = Lang.findByEdgeCode(targetLangCode);
-                ttsPlayer.speak(translatedText, targetLang.googleSttCode);
+                if (prefs.isTtsEnabled() && ttsPlayer != null) {
+                    Lang targetLang = Lang.findByEdgeCode(targetLangCode);
+                    ttsPlayer.speak(translatedText, targetLang.googleSttCode);
+                }
 
                 mainHandler.postDelayed(() -> {
-                    floatingManager.updateStatus("Đang lắng nghe...", Color.parseColor("#10B981"));
+                    floatingManager.updateStatus("Đang lắng nghe trực tiếp...", Color.parseColor("#10B981"));
                 }, 800);
 
             } catch (Throwable e) {
                 Log.e(TAG, "Audio Pipeline error: " + e.getMessage());
-                mainHandler.post(() -> floatingManager.updateStatus("Lỗi: " + e.getMessage(), Color.parseColor("#EF4444")));
+                mainHandler.post(() -> floatingManager.updateStatus("Lỗi STT: " + e.getMessage(), Color.parseColor("#EF4444")));
             }
         });
     }
 
     private void captureAndTranslateFullScreen() {
         if (screenCapturer == null) {
-            Toast.makeText(this, "Chưa có quyền chụp màn hình. Hãy bật lại ứng dụng", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Chưa khởi tạo chụp màn hình. Hãy bật lại quyền quay màn hình", Toast.LENGTH_LONG).show();
             return;
         }
 
@@ -254,7 +297,7 @@ public class TransXService extends Service {
 
     private void captureAndTranslateRegion(Rect region) {
         if (screenCapturer == null) {
-            Toast.makeText(this, "Chưa có quyền chụp màn hình", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Chưa khởi tạo chụp màn hình", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -268,12 +311,13 @@ public class TransXService extends Service {
             return;
         }
 
-        floatingManager.updateStatus("Đang quét OCR chữ màn hình...", Color.parseColor("#F59E0B"));
+        floatingManager.updateStatus("Đang quét OCR chữ (Offline ML Kit)...", Color.parseColor("#F59E0B"));
 
         processPool.execute(() -> {
             try {
-                String apiKey = prefs.getGoogleApiKey();
-                String recognized = GoogleVisionClient.recognizeText(bitmap, apiKey);
+                String srcLang = prefs.getSourceLang();
+                // Nhận dạng hoàn toàn Offline trên máy
+                String recognized = OfflineOcrEngine.recognizeText(bitmap, srcLang);
                 bitmap.recycle();
 
                 if (recognized == null || recognized.trim().isEmpty()) {
@@ -286,7 +330,6 @@ public class TransXService extends Service {
 
                 mainHandler.post(() -> floatingManager.updateStatus("Đang dịch chữ OCR...", Color.parseColor("#38BDF8")));
 
-                String srcLang = prefs.getSourceLang();
                 String tgtLang = prefs.getTargetLang();
                 String translated = translator.translateSingle(recognized, srcLang, tgtLang);
 
@@ -295,7 +338,7 @@ public class TransXService extends Service {
                     floatingManager.updateStatus("Đã dịch xong chữ màn hình", Color.parseColor("#10B981"));
                 });
 
-                if (prefs.isTtsEnabled()) {
+                if (prefs.isTtsEnabled() && ttsPlayer != null) {
                     Lang targetLang = Lang.findByEdgeCode(tgtLang);
                     ttsPlayer.speak(translated, targetLang.googleSttCode);
                 }
@@ -310,16 +353,17 @@ public class TransXService extends Service {
         });
     }
 
-    private void togglePipeline() {
+    private void toggleSpeechPipeline() {
         if (isListening) {
-            stopPipeline();
-            floatingManager.updateStatus("Tạm dừng nghe", Color.parseColor("#64748B"));
+            stopAudioOnly();
+            floatingManager.updateStatus("Tạm dừng nghe STT", Color.parseColor("#64748B"));
         } else {
+            currentMode = MODE_STT;
             initPipeline();
         }
     }
 
-    private void stopPipeline() {
+    private void stopAudioOnly() {
         isListening = false;
         if (capturer != null) {
             capturer.stop();
@@ -330,14 +374,18 @@ public class TransXService extends Service {
         }
     }
 
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
-        stopPipeline();
+    private void stopPipeline() {
+        stopAudioOnly();
         if (screenCapturer != null) {
             screenCapturer.stop();
             screenCapturer = null;
         }
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        stopPipeline();
         if (ttsPlayer != null) {
             ttsPlayer.release();
             ttsPlayer = null;
@@ -353,6 +401,7 @@ public class TransXService extends Service {
         if (processPool != null) {
             processPool.shutdownNow();
         }
+        OfflineOcrEngine.release();
         pendingProjectionData = null;
     }
 
