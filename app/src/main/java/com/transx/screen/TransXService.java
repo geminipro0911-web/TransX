@@ -8,13 +8,16 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.widget.Toast;
 
@@ -22,6 +25,8 @@ import androidx.core.app.NotificationCompat;
 
 import com.transx.screen.audio.InternalAudioCapturer;
 import com.transx.screen.audio.VadSegmenter;
+import com.transx.screen.ocr.GoogleVisionClient;
+import com.transx.screen.ocr.ScreenCapturer;
 import com.transx.screen.speech.EdgeTranslator;
 import com.transx.screen.speech.GoogleSpeechClient;
 import com.transx.screen.speech.TtsPlayer;
@@ -44,6 +49,7 @@ public class TransXService extends Service {
     private MediaProjection projection;
     private InternalAudioCapturer capturer;
     private VadSegmenter vad;
+    private ScreenCapturer screenCapturer;
     private TtsPlayer ttsPlayer;
     private EdgeTranslator translator;
     private FloatingManager floatingManager;
@@ -68,7 +74,7 @@ public class TransXService extends Service {
                     "TransX Screen Service",
                     NotificationManager.IMPORTANCE_LOW
             );
-            chan.setDescription("Dịch giọng nói thời gian thực trên màn hình");
+            chan.setDescription("Dịch giọng nói và màn hình thời gian thực");
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.createNotificationChannel(chan);
         }
@@ -83,7 +89,7 @@ public class TransXService extends Service {
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("TransX Screen đang chạy")
-                .setContentText("Đang dịch giọng nói thời gian thực")
+                .setContentText("Đang dịch giọng nói và màn hình")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentIntent(pi)
                 .setOngoing(true)
@@ -95,9 +101,9 @@ public class TransXService extends Service {
         // Start foreground immediately
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
-                if ("internal".equals(prefs.getAudioSource()) && pendingProjectionData != null) {
-                    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+                int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+                if ("mic".equals(prefs.getAudioSource())) {
+                    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
                 }
                 startForeground(NOTIF_ID, buildNotification(), type);
             } else {
@@ -131,6 +137,16 @@ public class TransXService extends Service {
                     String msg = prefs.isTtsEnabled() ? "Đã bật âm thanh đọc" : "Đã tắt âm thanh đọc";
                     Toast.makeText(TransXService.this, msg, Toast.LENGTH_SHORT).show();
                 }
+
+                @Override
+                public void onCaptureScreenRequested() {
+                    captureAndTranslateFullScreen();
+                }
+
+                @Override
+                public void onRegionCropRequested(Rect region) {
+                    captureAndTranslateRegion(region);
+                }
             });
             floatingManager.showAll();
         }
@@ -141,7 +157,7 @@ public class TransXService extends Service {
 
     private void initPipeline() {
         boolean useInternal = "internal".equals(prefs.getAudioSource());
-        if (useInternal && pendingProjectionData != null) {
+        if (pendingProjectionData != null && projection == null) {
             try {
                 MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
                 if (mpm != null) {
@@ -155,6 +171,13 @@ public class TransXService extends Service {
             } catch (Throwable e) {
                 Log.e(TAG, "MediaProjection error: " + e.getMessage());
             }
+        }
+
+        // Khởi động bộ chụp màn hình OCR
+        if (projection != null && screenCapturer == null) {
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            screenCapturer = new ScreenCapturer(projection, dm.widthPixels, dm.heightPixels, dm.densityDpi);
+            screenCapturer.start();
         }
 
         ttsPlayer = new TtsPlayer(this, mute -> {
@@ -172,7 +195,7 @@ public class TransXService extends Service {
 
         if (capturer.start()) {
             isListening = true;
-            floatingManager.updateStatus("Đang lắng nghe âm thanh...", Color.parseColor("#10B981"));
+            floatingManager.updateStatus("Đang lắng nghe trực tiếp...", Color.parseColor("#10B981"));
         } else {
             floatingManager.updateStatus("Lỗi khởi động thu âm", Color.parseColor("#EF4444"));
         }
@@ -208,11 +231,81 @@ public class TransXService extends Service {
 
                 mainHandler.postDelayed(() -> {
                     floatingManager.updateStatus("Đang lắng nghe...", Color.parseColor("#10B981"));
-                }, 1000);
+                }, 800);
 
             } catch (Throwable e) {
-                Log.e(TAG, "Pipeline error: " + e.getMessage());
+                Log.e(TAG, "Audio Pipeline error: " + e.getMessage());
                 mainHandler.post(() -> floatingManager.updateStatus("Lỗi: " + e.getMessage(), Color.parseColor("#EF4444")));
+            }
+        });
+    }
+
+    private void captureAndTranslateFullScreen() {
+        if (screenCapturer == null) {
+            Toast.makeText(this, "Chưa có quyền chụp màn hình. Hãy bật lại ứng dụng", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        floatingManager.hideTemporarily(() -> {
+            Bitmap bmp = screenCapturer.captureScreen();
+            processOcrBitmap(bmp, "Toàn màn hình");
+        });
+    }
+
+    private void captureAndTranslateRegion(Rect region) {
+        if (screenCapturer == null) {
+            Toast.makeText(this, "Chưa có quyền chụp màn hình", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Bitmap bmp = screenCapturer.captureRegion(region);
+        processOcrBitmap(bmp, "Vùng chọn");
+    }
+
+    private void processOcrBitmap(Bitmap bitmap, String sourceLabel) {
+        if (bitmap == null) {
+            floatingManager.updateStatus("Không lấy được hình ảnh màn hình", Color.parseColor("#EF4444"));
+            return;
+        }
+
+        floatingManager.updateStatus("Đang quét OCR chữ màn hình...", Color.parseColor("#F59E0B"));
+
+        processPool.execute(() -> {
+            try {
+                String apiKey = prefs.getGoogleApiKey();
+                String recognized = GoogleVisionClient.recognizeText(bitmap, apiKey);
+                bitmap.recycle();
+
+                if (recognized == null || recognized.trim().isEmpty()) {
+                    mainHandler.post(() -> {
+                        floatingManager.updateStatus("Không tìm thấy chữ trên màn hình", Color.parseColor("#94A3B8"));
+                        Toast.makeText(this, "Không tìm thấy chữ trên màn hình", Toast.LENGTH_SHORT).show();
+                    });
+                    return;
+                }
+
+                mainHandler.post(() -> floatingManager.updateStatus("Đang dịch chữ OCR...", Color.parseColor("#38BDF8")));
+
+                String srcLang = prefs.getSourceLang();
+                String tgtLang = prefs.getTargetLang();
+                String translated = translator.translateSingle(recognized, srcLang, tgtLang);
+
+                mainHandler.post(() -> {
+                    floatingManager.addTranslation("[" + sourceLabel + "] " + recognized, translated);
+                    floatingManager.updateStatus("Đã dịch xong chữ màn hình", Color.parseColor("#10B981"));
+                });
+
+                if (prefs.isTtsEnabled()) {
+                    Lang targetLang = Lang.findByEdgeCode(tgtLang);
+                    ttsPlayer.speak(translated, targetLang.googleSttCode);
+                }
+
+            } catch (Throwable e) {
+                Log.e(TAG, "OCR error: " + e.getMessage());
+                mainHandler.post(() -> {
+                    floatingManager.updateStatus("Lỗi OCR: " + e.getMessage(), Color.parseColor("#EF4444"));
+                    Toast.makeText(this, "Lỗi OCR: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
             }
         });
     }
@@ -241,6 +334,10 @@ public class TransXService extends Service {
     public void onDestroy() {
         super.onDestroy();
         stopPipeline();
+        if (screenCapturer != null) {
+            screenCapturer.stop();
+            screenCapturer = null;
+        }
         if (ttsPlayer != null) {
             ttsPlayer.release();
             ttsPlayer = null;

@@ -24,6 +24,8 @@ public class FloatingSubtitleView extends LinearLayout {
     public interface SubtitleActionListener {
         void onClose();
         void onToggleTts();
+        void onCaptureScreen();
+        void onSelectRegion();
     }
 
     private final WindowManager wm;
@@ -59,7 +61,7 @@ public class FloatingSubtitleView extends LinearLayout {
 
         // Pre-create member views
         tvStatus = new TextView(context);
-        tvStatus.setText("Sẵn sàng nghe...");
+        tvStatus.setText("Sẵn sàng nghe & dịch...");
         tvStatus.setTextColor(Color.parseColor("#94A3B8"));
         tvStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
 
@@ -77,12 +79,27 @@ public class FloatingSubtitleView extends LinearLayout {
         header.setPadding(0, 0, 0, dp(4));
 
         TextView tvTitle = new TextView(context);
-        tvTitle.setText("TransX Screen");
+        tvTitle.setText("TransX");
         tvTitle.setTextColor(Color.parseColor("#38BDF8")); // Cyan
         tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         tvTitle.setTypeface(tvTitle.getTypeface(), Typeface.BOLD);
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.0f);
         header.addView(tvTitle, titleLp);
+
+        // Action Buttons: OCR Screen, OCR Region, TTS, Clear, Close
+        Button btnCapture = createSmallButton("📷");
+        btnCapture.setOnClickListener(v -> {
+            Toast.makeText(getContext(), "Đang chụp & dịch màn hình...", Toast.LENGTH_SHORT).show();
+            if (listener != null) listener.onCaptureScreen();
+        });
+        header.addView(btnCapture);
+
+        Button btnCrop = createSmallButton("🔲");
+        btnCrop.setOnClickListener(v -> {
+            Toast.makeText(getContext(), "Kéo chọn vùng muốn dịch", Toast.LENGTH_SHORT).show();
+            if (listener != null) listener.onSelectRegion();
+        });
+        header.addView(btnCrop);
 
         btnTts = createSmallButton("🔊");
         btnTts.setOnClickListener(v -> {
@@ -95,7 +112,7 @@ public class FloatingSubtitleView extends LinearLayout {
         Button btnClear = createSmallButton("🗑️");
         btnClear.setOnClickListener(v -> {
             itemsContainer.removeAllViews();
-            tvStatus.setText("Sẵn sàng nghe...");
+            tvStatus.setText("Đã xóa bản dịch.");
         });
         header.addView(btnClear);
 
@@ -107,7 +124,7 @@ public class FloatingSubtitleView extends LinearLayout {
 
         addView(header);
 
-        // Header touch to drag
+        // Header touch to drag: uses TOP|START coordinates (dx and dy directly add)
         header.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
@@ -117,8 +134,10 @@ public class FloatingSubtitleView extends LinearLayout {
                     initialTouchY = event.getRawY();
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    params.x = (int) (initialX + (event.getRawX() - initialTouchX));
-                    params.y = (int) (initialY + (event.getRawY() - initialTouchY));
+                    float dx = event.getRawX() - initialTouchX;
+                    float dy = event.getRawY() - initialTouchY;
+                    params.x = (int) (initialX + dx);
+                    params.y = (int) (initialY + dy);
                     try { wm.updateViewLayout(this, params); } catch (Exception ignored) {}
                     return true;
             }
@@ -153,8 +172,8 @@ public class FloatingSubtitleView extends LinearLayout {
                     initialTouchY = event.getRawY();
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    int newW = Math.max(dp(200), (int) (initialWidth + (event.getRawX() - initialTouchX)));
-                    int newH = Math.max(dp(120), (int) (initialHeight + (event.getRawY() - initialTouchY)));
+                    int newW = Math.max(dp(220), (int) (initialWidth + (event.getRawX() - initialTouchX)));
+                    int newH = Math.max(dp(140), (int) (initialHeight + (event.getRawY() - initialTouchY)));
                     params.width = newW;
                     params.height = newH;
                     try { wm.updateViewLayout(this, params); } catch (Exception ignored) {}
@@ -181,7 +200,7 @@ public class FloatingSubtitleView extends LinearLayout {
 
             TextView tvOrig = new TextView(getContext());
             tvOrig.setText("[" + timeStr + "] " + orig);
-            tvOrig.setTextColor(Color.parseColor("#CBD5E1"));
+            tvOrig.setTextColor(Color.parseColor("#94A3B8"));
             tvOrig.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             entry.addView(tvOrig);
 
@@ -210,10 +229,10 @@ public class FloatingSubtitleView extends LinearLayout {
         Button b = new Button(getContext());
         b.setText(text);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        b.setPadding(dp(6), 0, dp(6), 0);
+        b.setPadding(dp(4), 0, dp(4), 0);
         b.setBackgroundColor(Color.TRANSPARENT);
         b.setTextColor(Color.WHITE);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(36), dp(32));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(34), dp(32));
         lp.leftMargin = dp(2);
         b.setLayoutParams(lp);
         return b;

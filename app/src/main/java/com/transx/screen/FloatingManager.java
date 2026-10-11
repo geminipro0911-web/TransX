@@ -3,9 +3,13 @@ package com.transx.screen;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.os.Build;
+import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.View;
 import android.view.WindowManager;
+import com.transx.screen.ocr.RegionSelectorView;
 
 public class FloatingManager {
     private final Context context;
@@ -17,10 +21,14 @@ public class FloatingManager {
     private FloatingSubtitleView subtitleView;
     private WindowManager.LayoutParams subtitleParams;
 
+    private RegionSelectorView regionSelectorView;
+
     public interface FloatingListener {
         void onToggleListening();
         void onStopService();
         void onToggleTts();
+        void onCaptureScreenRequested();
+        void onRegionCropRequested(Rect region);
     }
 
     private final FloatingListener listener;
@@ -50,8 +58,8 @@ public class FloatingManager {
                 PixelFormat.TRANSLUCENT
         );
         bubbleParams.gravity = Gravity.TOP | Gravity.START;
-        bubbleParams.x = 40;
-        bubbleParams.y = 300;
+        bubbleParams.x = dp(16);
+        bubbleParams.y = dp(240);
 
         bubbleView = new FloatingBubbleView(context, wm, bubbleParams, new FloatingBubbleView.OnBubbleClickListener() {
             @Override
@@ -75,14 +83,23 @@ public class FloatingManager {
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
 
+        DisplayMetrics dm = context.getResources().getDisplayMetrics();
+        int screenW = dm.widthPixels;
+        int screenH = dm.heightPixels;
+
+        int initW = Math.min(dp(340), screenW - dp(24));
+        int initH = dp(240);
+
         subtitleParams = new WindowManager.LayoutParams(
-                dp(320), dp(220),
+                initW, initH,
                 layoutType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT
         );
-        subtitleParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        subtitleParams.y = dp(80);
+        // Định vị theo TOP|START để cử chỉ kéo di chuyển (drag) hoàn toàn trùng khớp với ngón tay
+        subtitleParams.gravity = Gravity.TOP | Gravity.START;
+        subtitleParams.x = Math.max(0, (screenW - initW) / 2);
+        subtitleParams.y = Math.max(0, screenH - initH - dp(80));
 
         subtitleView = new FloatingSubtitleView(context, wm, subtitleParams, new FloatingSubtitleView.SubtitleActionListener() {
             @Override
@@ -94,17 +111,73 @@ public class FloatingManager {
             public void onToggleTts() {
                 if (listener != null) listener.onToggleTts();
             }
+
+            @Override
+            public void onCaptureScreen() {
+                if (listener != null) listener.onCaptureScreenRequested();
+            }
+
+            @Override
+            public void onSelectRegion() {
+                showRegionSelector();
+            }
         });
 
         try { wm.addView(subtitleView, subtitleParams); } catch (Exception ignored) {}
     }
 
-    public void toggleSubtitleVisibility() {
-        if (subtitleView != null) {
-            hideSubtitle();
-        } else {
-            showSubtitle();
+    public void showRegionSelector() {
+        if (regionSelectorView != null) return;
+
+        int layoutType = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : WindowManager.LayoutParams.TYPE_PHONE;
+
+        WindowManager.LayoutParams rParams = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+        );
+
+        regionSelectorView = new RegionSelectorView(context);
+        regionSelectorView.setListener(new RegionSelectorView.Listener() {
+            @Override
+            public void onRegionSelected(Rect region) {
+                hideRegionSelector();
+                if (listener != null) listener.onRegionCropRequested(region);
+            }
+
+            @Override
+            public void onCancel() {
+                hideRegionSelector();
+            }
+        });
+
+        try { wm.addView(regionSelectorView, rParams); } catch (Exception ignored) {}
+    }
+
+    public void hideRegionSelector() {
+        if (regionSelectorView != null) {
+            try { wm.removeView(regionSelectorView); } catch (Exception ignored) {}
+            regionSelectorView = null;
         }
+    }
+
+    public void hideTemporarily(Runnable action) {
+        // Ẩn tạm thời để chụp màn hình sạch không dính nút dịch
+        if (bubbleView != null) bubbleView.setVisibility(View.INVISIBLE);
+        if (subtitleView != null) subtitleView.setVisibility(View.INVISIBLE);
+
+        subtitleView.postDelayed(() -> {
+            try {
+                action.run();
+            } finally {
+                if (bubbleView != null) bubbleView.setVisibility(View.VISIBLE);
+                if (subtitleView != null) subtitleView.setVisibility(View.VISIBLE);
+            }
+        }, 50);
     }
 
     public void hideSubtitle() {
@@ -114,21 +187,40 @@ public class FloatingManager {
         }
     }
 
-    public void updateStatus(String status, int dotColor) {
-        if (subtitleView != null) subtitleView.setStatus(status);
+    public void toggleSubtitleVisibility() {
+        if (subtitleView != null) {
+            if (subtitleView.getVisibility() == View.VISIBLE) {
+                subtitleView.setVisibility(View.GONE);
+            } else {
+                subtitleView.setVisibility(View.VISIBLE);
+            }
+        } else {
+            showSubtitle();
+        }
+    }
+
+    public void updateStatus(String text, int dotColor) {
+        if (subtitleView != null) subtitleView.setStatus(text);
         if (bubbleView != null) bubbleView.setStatusColor(dotColor);
     }
 
     public void addTranslation(String orig, String trans) {
         if (subtitleView == null) showSubtitle();
-        if (subtitleView != null) subtitleView.addTranslation(orig, trans);
+        if (subtitleView != null) {
+            subtitleView.setVisibility(View.VISIBLE);
+            subtitleView.addTranslation(orig, trans);
+        }
     }
 
     public void removeAll() {
-        hideSubtitle();
+        hideRegionSelector();
         if (bubbleView != null) {
             try { wm.removeView(bubbleView); } catch (Exception ignored) {}
             bubbleView = null;
+        }
+        if (subtitleView != null) {
+            try { wm.removeView(subtitleView); } catch (Exception ignored) {}
+            subtitleView = null;
         }
     }
 

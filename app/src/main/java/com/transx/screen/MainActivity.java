@@ -190,11 +190,9 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        if ("internal".equals(prefs.getAudioSource())) {
-            MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-            if (mpm != null) {
-                startActivityForResult(mpm.createScreenCaptureIntent(), REQ_PROJECTION);
-            }
+        MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+        if (mpm != null) {
+            startActivityForResult(mpm.createScreenCaptureIntent(), REQ_PROJECTION);
         } else {
             startTransService(null, 0);
         }
@@ -209,7 +207,8 @@ public class MainActivity extends AppCompatActivity {
             if (resultCode == Activity.RESULT_OK && data != null) {
                 startTransService(data, resultCode);
             } else {
-                Toast.makeText(this, "Cần cấp quyền chia sẻ âm thanh để tiếp tục", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Không có quyền quay màn hình, chuyển sang chế độ Mic ngoài", Toast.LENGTH_SHORT).show();
+                startTransService(null, 0);
             }
         }
     }
