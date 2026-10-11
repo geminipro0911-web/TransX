@@ -191,6 +191,17 @@ public class ScreenCapturer {
         return hash;
     }
 
+    public static long subtitleRegionHash(Bitmap bmp) {
+        if (bmp == null || bmp.getWidth() < 8 || bmp.getHeight() < 8) return 0;
+        int top = (int) (bmp.getHeight() * 0.65f);
+        int h = bmp.getHeight() - top;
+        if (h < 8) return averageHash(bmp);
+        Bitmap bottomPortion = Bitmap.createBitmap(bmp, 0, top, bmp.getWidth(), h);
+        long hash = averageHash(bottomPortion);
+        if (bottomPortion != bmp) bottomPortion.recycle();
+        return hash;
+    }
+
     public static int hamming(long a, long b) {
         return Long.bitCount(a ^ b);
     }

@@ -5,8 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -27,12 +29,13 @@ import com.transx.screen.audio.InternalAudioCapturer;
 import com.transx.screen.audio.VadSegmenter;
 import com.transx.screen.ocr.OfflineOcrEngine;
 import com.transx.screen.ocr.ScreenCapturer;
-import com.transx.screen.speech.EdgeTranslator;
 import com.transx.screen.speech.GoogleSpeechClient;
+import com.transx.screen.speech.TranslationManager;
 import com.transx.screen.speech.TtsPlayer;
 import com.transx.screen.util.Lang;
 import com.transx.screen.util.Prefs;
 
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
@@ -59,10 +62,11 @@ public class TransXService extends Service {
     private VadSegmenter vad;
     private ScreenCapturer screenCapturer;
     private TtsPlayer ttsPlayer;
-    private EdgeTranslator translator;
+    private TranslationManager translationManager;
     private FloatingManager floatingManager;
     private ExecutorService processPool;
     private boolean isListening = false;
+    private volatile boolean isScreenOn = true;
 
     // Vòng lặp quét OCR Live liên tục & Generation Epochs
     private volatile boolean isLiveOcrRunning = false;
@@ -75,15 +79,33 @@ public class TransXService extends Service {
     private String lastRecognizedText = "";
     private long lastOcrTime = 0;
 
+    private final BroadcastReceiver screenStateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null || intent.getAction() == null) return;
+            if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
+                isScreenOn = false;
+                if (ttsPlayer != null) ttsPlayer.stop();
+            } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) {
+                isScreenOn = true;
+            }
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
         mainHandler = new Handler(Looper.getMainLooper());
         prefs = new Prefs(this);
-        translator = new EdgeTranslator();
+        translationManager = new TranslationManager();
         processPool = Executors.newSingleThreadExecutor();
 
         createNotificationChannel();
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_SCREEN_OFF);
+        filter.addAction(Intent.ACTION_SCREEN_ON);
+        registerReceiver(screenStateReceiver, filter);
     }
 
     private void createNotificationChannel() {
@@ -207,6 +229,13 @@ public class TransXService extends Service {
                         ttsPlayer.stop();
                     }
                 }
+
+                @Override
+                public void onToggleInPlace(boolean enabled) {
+                    if (!enabled && floatingManager != null) {
+                        floatingManager.updateInPlaceBlocks(null);
+                    }
+                }
             });
             floatingManager.showAll();
         } else {
@@ -282,30 +311,24 @@ public class TransXService extends Service {
 
     // ---------- LÀM SẠCH VĂN BẢN (LOẠI BỎ THẺ NGÔN NGỮ NGUỒN VÀ WATERMARK) ----------
 
-    /**
-     * Làm sạch văn bản OCR trước khi gửi sang dịch:
-     * - Loại bỏ hoàn toàn các thẻ nhãn ngôn ngữ như: ": ENGLISH", ": TIẾNG ANH", ": [EN]", ": [vi]", ":[ngôn ngữ nguồn]"
-     * - Loại bỏ các nhãn vùng như [Vùng quét], [Màn hình], [Chụp nhanh], [Vùng chọn]
-     * - Loại bỏ watermark cố định ở góc (ENGLISH, LEAP PODCAST...)
-     */
     public static String cleanOcrText(String text, String srcLang) {
         if (text == null) return "";
         String s = text.trim();
 
-        // 1. Loại bỏ các thẻ trong ngoặc vuông: [Vùng quét], [Màn hình], [Chụp nhanh], [Vùng chọn], [ngôn ngữ nguồn], [en], [English], v.v.
+        // 1. Loại bỏ các thẻ trong ngoặc vuông
         s = s.replaceAll("(?i)\\[\\s*(vùng quét|màn hình|chụp nhanh|vùng chọn|ngôn ngữ.*|source.*|lang.*|en|vi|ja|ko|zh|fr|de|es|ru|english|vietnamese|japanese|korean|chinese|french|german|spanish|russian|tiếng anh|tiếng việt|tiếng trung|tiếng nhật|tiếng hàn)\\s*\\]", "");
 
-        // 2. Loại bỏ nhãn ngôn ngữ kèm dấu hai chấm ở cuối chuỗi: ": ENGLISH", ": TIẾNG ANH", ": [ENGLISH]", ": EN", ": vi", ": [ngôn ngữ nguồn]"
+        // 2. Loại bỏ nhãn ngôn ngữ kèm dấu hai chấm ở cuối chuỗi
         s = s.replaceAll("(?i)[:\\-–—]\\s*\\[?\\s*(english|vietnamese|japanese|korean|chinese|french|german|spanish|russian|tiếng anh|tiếng việt|tiếng trung|tiếng nhật|tiếng hàn|tiếng pháp|tiếng đức|tiếng nga|en|vi|ja|ko|zh|fr|de|es|ru|auto|ngôn ngữ nguồn)\\s*\\]?\\s*$", "");
 
-        // 3. Loại bỏ nhãn ngôn ngữ ở đầu chuỗi: "ENGLISH:", "EN:", "[EN]:", "[English]:"
+        // 3. Loại bỏ nhãn ngôn ngữ ở đầu chuỗi
         s = s.replaceAll("(?i)^\\s*\\[?\\s*(english|vietnamese|japanese|korean|chinese|french|german|spanish|russian|tiếng anh|tiếng việt|tiếng trung|tiếng nhật|tiếng hàn|en|vi|ja|ko|zh|fr|de|es|ru|ngôn ngữ nguồn)\\s*\\]?\\s*[:\\-–—]\\s*", "");
 
-        // 4. Loại bỏ watermark logo ở cuối dòng (như logo "ENGLISH", "LEAP PODCAST" của các kênh podcast)
+        // 4. Loại bỏ watermark logo ở cuối dòng
         s = s.replaceAll("(?i)\\b(ENGLISH|VIETNAMESE|JAPANESE|KOREAN|CHINESE|FRENCH|GERMAN|SPANISH|RUSSIAN|TIẾNG ANH|TIẾNG VIỆT)\\b\\s*$", "");
         s = s.replaceAll("(?i)\\b(LEAP PODCAST|ENGLISH PODCAST|PODCAST|LEAP)\\b\\s*$", "");
 
-        // 5. Loại bỏ dấu hai chấm/gạch nối bị sót lại ở cuối chuỗi
+        // 5. Loại bỏ dấu hai chấm/gạch nối cuối chuỗi
         s = s.replaceAll("[:\\-–—]\\s*$", "");
 
         // 6. Chuẩn hóa khoảng trắng
@@ -314,25 +337,13 @@ public class TransXService extends Service {
         return s;
     }
 
-    /**
-     * Làm sạch văn bản sau dịch trước khi hiển thị lên HUD và phát giọng nói TTS:
-     * - Loại bỏ bất kỳ nhãn nào còn sót như ": TIẾNG ANH", ": TIẾNG VIỆT", "[Tiếng Anh]"
-     * - Đảm bảo TTS chỉ phát nội dung ngữ nghĩa thuần túy, không đọc nhãn thừa
-     */
     public static String cleanSpokenText(String text) {
         if (text == null) return "";
         String s = text.trim();
 
-        // Loại bỏ mọi ngoặc vuông
         s = s.replaceAll("(?i)\\[.*?\\]", "");
-
-        // Loại bỏ nhãn ngôn ngữ ở cuối: ": TIẾNG ANH", ": ENGLISH", ": TIẾNG VIỆT", v.v.
         s = s.replaceAll("(?i)[:\\-–—]\\s*\\[?\\s*(english|vietnamese|japanese|korean|chinese|french|german|spanish|russian|tiếng anh|tiếng việt|tiếng trung|tiếng nhật|tiếng hàn|tiếng pháp|tiếng đức|tiếng nga|en|vi|ja|ko|zh|fr|de|es|ru|ngôn ngữ nguồn)\\s*\\]?\\s*$", "");
-
-        // Loại bỏ nhãn ngôn ngữ ở đầu: "TIẾNG ANH:", "TIẾNG VIỆT:", v.v.
         s = s.replaceAll("(?i)^\\s*(tiếng anh|tiếng việt|tiếng trung|tiếng nhật|tiếng hàn|tiếng pháp|tiếng đức|tiếng nga|english|vietnamese|en|vi|ja|ko|zh|fr|de|es|ru)\\s*[:\\-–—]\\s*", "");
-
-        // Loại bỏ dấu hai chấm/gạch nối cuối chuỗi
         s = s.replaceAll("[:\\-–—]\\s*$", "");
         s = s.replaceAll("\\s+", " ").trim();
 
@@ -355,6 +366,12 @@ public class TransXService extends Service {
             Log.i(TAG, "Live OCR background loop started (epoch=" + epoch + ")");
             while (isLiveOcrRunning && epoch == liveOcrEpoch.get()) {
                 try {
+                    // Nếu tắt màn hình điện thoại -> tạm nghỉ để tiết kiệm pin
+                    if (!isScreenOn) {
+                        Thread.sleep(400);
+                        continue;
+                    }
+
                     long now = System.currentTimeMillis();
                     // Giãn cách tối thiểu giữa 2 lần quét: 300ms
                     if (now - lastOcrTime < 300) {
@@ -379,12 +396,14 @@ public class TransXService extends Service {
                         break;
                     }
 
-                    // 1. Tính hash 8x8 cực nhẹ (<0.5ms) để kiểm tra màn hình có thay đổi không
-                    long currentHash = ScreenCapturer.averageHash(bmp);
+                    // 1. Tính hash thông minh (nếu quét toàn màn hình thì ưu tiên hash 35% vùng phụ đề phía dưới)
+                    long currentHash = (liveScanRegion != null)
+                            ? ScreenCapturer.averageHash(bmp)
+                            : ScreenCapturer.subtitleRegionHash(bmp);
                     int diff = ScreenCapturer.hamming(lastFrameHash, currentHash);
                     lastFrameHash = currentHash;
 
-                    // Nếu màn hình không có chuyển động chữ mới (diff < 3) và đã có text cũ -> bỏ qua
+                    // Nếu màn hình không đổi (diff < 3) và đã có text cũ -> bỏ qua
                     if (diff < 3 && !lastRecognizedText.isEmpty()) {
                         bmp.recycle();
                         Thread.sleep(250);
@@ -393,8 +412,27 @@ public class TransXService extends Service {
 
                     lastOcrTime = System.currentTimeMillis();
 
-                    // 2. Chạy nhận dạng chữ hoàn toàn Offline qua Google ML Kit (~30-50ms)
                     String srcLang = prefs.getSourceLang();
+                    String tgtLang = prefs.getTargetLang();
+
+                    // 2. Chế độ Dịch đè trực tiếp (In-Place Mode): Vẽ chữ đè lên vị trí gốc trên màn hình
+                    if (prefs.isInPlaceMode()) {
+                        try {
+                            List<OfflineOcrEngine.OcrBlock> blocks = OfflineOcrEngine.recognizeBlocks(bmp, srcLang, liveScanRegion);
+                            if (blocks != null && !blocks.isEmpty()) {
+                                for (OfflineOcrEngine.OcrBlock b : blocks) {
+                                    String cleanB = cleanOcrText(b.originalText, srcLang);
+                                    if (!cleanB.isEmpty()) {
+                                        String t = translationManager.translate(cleanB, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
+                                        b.translatedText = cleanSpokenText(t);
+                                    }
+                                }
+                                mainHandler.post(() -> floatingManager.updateInPlaceBlocks(blocks));
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+
+                    // 3. Chạy nhận dạng chữ toàn khối cho HUD và TTS
                     String recognized = OfflineOcrEngine.recognizeText(bmp, srcLang);
                     bmp.recycle();
 
@@ -405,15 +443,31 @@ public class TransXService extends Service {
                         continue;
                     }
 
-                    // Làm sạch chuỗi: bỏ :[ngôn ngữ nguồn], nhãn vùng, v.v.
                     String cleanText = cleanOcrText(recognized, srcLang);
                     if (cleanText.isEmpty() || cleanText.equalsIgnoreCase(lastRecognizedText)) {
                         Thread.sleep(200);
                         continue;
                     }
+
+                    // 4. Khử giật câu cuốn (Karaoke Debounce):
+                    // Nếu câu mới đang hiển thị dần từng từ từ câu cũ, chờ 350ms để câu hoàn chỉnh trước khi đọc
+                    if (!lastRecognizedText.isEmpty() && cleanText.startsWith(lastRecognizedText) && cleanText.length() > lastRecognizedText.length()) {
+                        try {
+                            Thread.sleep(350);
+                            if (!isLiveOcrRunning || epoch != liveOcrEpoch.get()) break;
+                            Bitmap nextBmp = screenCapturer.captureLatestFrame(liveScanRegion);
+                            if (nextBmp != null) {
+                                String nextRec = OfflineOcrEngine.recognizeText(nextBmp, srcLang);
+                                nextBmp.recycle();
+                                String nextClean = cleanOcrText(nextRec, srcLang);
+                                if (!nextClean.isEmpty()) {
+                                    cleanText = nextClean;
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+                    }
                     lastRecognizedText = cleanText;
 
-                    // 3. Có chữ mới xuất hiện trên màn hình -> Dịch ngay qua Edge API
                     if (!isLiveOcrRunning || epoch != liveOcrEpoch.get()) break;
                     mainHandler.post(() -> {
                         if (isLiveOcrRunning && epoch == liveOcrEpoch.get()) {
@@ -421,10 +475,9 @@ public class TransXService extends Service {
                         }
                     });
 
-                    String tgtLang = prefs.getTargetLang();
-                    String translated = translator.translateSingle(cleanText, srcLang, tgtLang);
+                    // 5. Dịch thông minh (LRU Cache + Offline ML Kit + Edge API fallback)
+                    String translated = translationManager.translate(cleanText, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
 
-                    // Kiểm tra dừng ngay sau khi dịch xong
                     if (!isLiveOcrRunning || epoch != liveOcrEpoch.get()) break;
 
                     String cleanTrans = cleanSpokenText(translated);
@@ -436,7 +489,7 @@ public class TransXService extends Service {
                         floatingManager.updateStatus("Live OCR: Đang theo dõi...", Color.parseColor("#10B981"));
                     });
 
-                    // Đọc phát âm nếu bật TTS và user chưa ấn dừng
+                    // 6. Đọc phát âm nếu bật TTS và user chưa ấn dừng
                     if (isLiveOcrRunning && epoch == liveOcrEpoch.get() && prefs.isTtsEnabled() && ttsPlayer != null) {
                         Lang targetLang = Lang.findByEdgeCode(tgtLang);
                         ttsPlayer.speak(cleanTrans, targetLang.googleSttCode);
@@ -462,7 +515,6 @@ public class TransXService extends Service {
         isLiveOcrRunning = false;
         liveOcrEpoch.incrementAndGet();
 
-        // DỪNG NGAY LẬP TỨC LUỒNG GIỌNG NÓI TTS VÀ HỦY CÁC TÁC VỤ ĐANG DỊCH
         if (ttsPlayer != null) {
             ttsPlayer.stop();
         }
@@ -470,6 +522,7 @@ public class TransXService extends Service {
         if (floatingManager != null) {
             floatingManager.setLiveOcrState(false);
             floatingManager.updateStatus("Live OCR: Đã tạm dừng", Color.parseColor("#64748B"));
+            floatingManager.updateInPlaceBlocks(null);
         }
         if (liveOcrThread != null) {
             liveOcrThread.interrupt();
@@ -523,7 +576,7 @@ public class TransXService extends Service {
                 });
 
                 String targetLangCode = prefs.getTargetLang();
-                String translatedText = translator.translateSingle(cleanRec, srcLang.edgeCode, targetLangCode);
+                String translatedText = translationManager.translate(cleanRec, srcLang.edgeCode, targetLangCode, prefs.isOfflineTranslatePreferred());
 
                 if (!isListening || epoch != audioEpoch.get()) return;
                 String cleanTrans = cleanSpokenText(translatedText);
@@ -590,6 +643,24 @@ public class TransXService extends Service {
         processPool.execute(() -> {
             try {
                 String srcLang = prefs.getSourceLang();
+                String tgtLang = prefs.getTargetLang();
+
+                if (prefs.isInPlaceMode()) {
+                    try {
+                        List<OfflineOcrEngine.OcrBlock> blocks = OfflineOcrEngine.recognizeBlocks(bitmap, srcLang, liveScanRegion);
+                        if (blocks != null && !blocks.isEmpty()) {
+                            for (OfflineOcrEngine.OcrBlock b : blocks) {
+                                String cleanB = cleanOcrText(b.originalText, srcLang);
+                                if (!cleanB.isEmpty()) {
+                                    String t = translationManager.translate(cleanB, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
+                                    b.translatedText = cleanSpokenText(t);
+                                }
+                            }
+                            mainHandler.post(() -> floatingManager.updateInPlaceBlocks(blocks));
+                        }
+                    } catch (Throwable ignored) {}
+                }
+
                 String recognized = OfflineOcrEngine.recognizeText(bitmap, srcLang);
                 bitmap.recycle();
 
@@ -608,8 +679,7 @@ public class TransXService extends Service {
 
                 mainHandler.post(() -> floatingManager.updateStatus("Đang dịch chữ OCR...", Color.parseColor("#38BDF8")));
 
-                String tgtLang = prefs.getTargetLang();
-                String translated = translator.translateSingle(cleanRec, srcLang, tgtLang);
+                String translated = translationManager.translate(cleanRec, srcLang, tgtLang, prefs.isOfflineTranslatePreferred());
 
                 if (epoch != liveOcrEpoch.get()) return;
                 String cleanTrans = cleanSpokenText(translated);
@@ -671,6 +741,10 @@ public class TransXService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        try {
+            unregisterReceiver(screenStateReceiver);
+        } catch (Exception ignored) {}
+
         stopPipeline();
         if (ttsPlayer != null) {
             ttsPlayer.release();

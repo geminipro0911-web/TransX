@@ -1,6 +1,7 @@
 package com.transx.screen.ocr;
 
 import android.graphics.Bitmap;
+import android.graphics.Rect;
 import android.util.Log;
 import com.google.android.gms.tasks.Tasks;
 import com.google.mlkit.vision.common.InputImage;
@@ -11,6 +12,8 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions;
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Model OCR Offline hoàn toàn trên thiết bị (On-Device ML Kit).
@@ -18,6 +21,17 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
  */
 public class OfflineOcrEngine {
     private static final String TAG = "OfflineOcrEngine";
+
+    public static class OcrBlock {
+        public final Rect boundingBox;
+        public final String originalText;
+        public String translatedText;
+
+        public OcrBlock(Rect boundingBox, String originalText) {
+            this.boundingBox = boundingBox;
+            this.originalText = originalText;
+        }
+    }
 
     private static TextRecognizer latinRecognizer;
     private static TextRecognizer chineseRecognizer;
@@ -87,6 +101,36 @@ public class OfflineOcrEngine {
         }
 
         return (text != null) ? text.trim() : "";
+    }
+
+    /**
+     * Nhận dạng theo khối chữ kèm tọa độ màn hình (phục vụ tính năng Dịch Đè Trực Tiếp In-Place)
+     */
+    public static List<OcrBlock> recognizeBlocks(Bitmap bitmap, String srcLang, Rect offsetRegion) throws Exception {
+        List<OcrBlock> list = new ArrayList<>();
+        if (bitmap == null || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0) {
+            return list;
+        }
+
+        InputImage image = InputImage.fromBitmap(bitmap, 0);
+        TextRecognizer recognizer = getRecognizer(srcLang);
+        Text result = Tasks.await(recognizer.process(image));
+        if (result == null || result.getTextBlocks().isEmpty()) {
+            return list;
+        }
+
+        int offX = (offsetRegion != null) ? offsetRegion.left : 0;
+        int offY = (offsetRegion != null) ? offsetRegion.top : 0;
+
+        for (Text.TextBlock tb : result.getTextBlocks()) {
+            Rect box = tb.getBoundingBox();
+            String txt = tb.getText();
+            if (box != null && txt != null && !txt.trim().isEmpty()) {
+                Rect shifted = new Rect(box.left + offX, box.top + offY, box.right + offX, box.bottom + offY);
+                list.add(new OcrBlock(shifted, txt.trim()));
+            }
+        }
+        return list;
     }
 
     public static synchronized void release() {

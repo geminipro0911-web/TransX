@@ -1,23 +1,31 @@
 package com.transx.screen;
 
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import com.transx.screen.util.Prefs;
+import com.transx.screen.util.SubtitleExporter;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 public class FloatingSubtitleView extends LinearLayout {
@@ -29,26 +37,44 @@ public class FloatingSubtitleView extends LinearLayout {
         void onCaptureScreen();
         void onSelectRegion();
         void onClearHistory();
+        void onToggleInPlace(boolean enabled);
     }
 
     private final WindowManager wm;
     private final WindowManager.LayoutParams params;
     private final SubtitleActionListener listener;
+    private final Prefs prefs;
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
+    private final List<SubtitleExporter.SubtitleItem> historyItems = new ArrayList<>();
+
+    private LinearLayout header;
+    private LinearLayout footer;
     private TextView tvTitle;
     private TextView tvStatus;
     private LinearLayout itemsContainer;
     private ScrollView scrollView;
 
+    // Cinema Subtitle View
+    private TextView tvCinemaSubtitle;
+    private Button btnExitCinema;
+
     private Button btnLiveOcr;
     private Button btnCapture;
     private Button btnCrop;
+    private Button btnCinema;
+    private Button btnBilingual;
+    private Button btnInPlace;
+    private Button btnExport;
     private Button btnListen;
     private Button btnTts;
 
     private boolean ttsMuted = false;
     private boolean isListening = true;
     private boolean isLiveOcrRunning = true;
+    private boolean isCinemaMode = false;
+
+    private GradientDrawable normalBg;
 
     private float initialTouchX, initialTouchY;
     private int initialX, initialY;
@@ -59,17 +85,18 @@ public class FloatingSubtitleView extends LinearLayout {
         this.wm = wm;
         this.params = params;
         this.listener = listener;
+        this.prefs = new Prefs(context);
 
         setOrientation(VERTICAL);
         int pad = dp(10);
         setPadding(pad, dp(6), pad, dp(6));
 
-        GradientDrawable bg = new GradientDrawable();
-        bg.setShape(GradientDrawable.RECTANGLE);
-        bg.setCornerRadius(dp(16));
-        bg.setColor(Color.parseColor("#E60F172A")); // Slate 900 semi-transparent
-        bg.setStroke(dp(1), Color.parseColor("#334155"));
-        setBackground(bg);
+        normalBg = new GradientDrawable();
+        normalBg.setShape(GradientDrawable.RECTANGLE);
+        normalBg.setCornerRadius(dp(16));
+        normalBg.setColor(Color.parseColor("#E60F172A")); // Slate 900 semi-transparent
+        normalBg.setStroke(dp(1), Color.parseColor("#334155"));
+        setBackground(normalBg);
 
         // Pre-create member views
         tvStatus = new TextView(context);
@@ -83,8 +110,21 @@ public class FloatingSubtitleView extends LinearLayout {
         scrollView.setFillViewport(true);
         scrollView.addView(itemsContainer);
 
+        // Cinema Subtitle TextView (Hiển thị to, nổi bật khi ở Cinema Mode)
+        tvCinemaSubtitle = new TextView(context);
+        tvCinemaSubtitle.setTextColor(Color.parseColor("#FEF08A")); // Vàng phụ đề nổi bật
+        tvCinemaSubtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        tvCinemaSubtitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvCinemaSubtitle.setShadowLayer(dp(3), 0, dp(1), Color.BLACK);
+        tvCinemaSubtitle.setGravity(Gravity.CENTER);
+        tvCinemaSubtitle.setPadding(dp(8), dp(8), dp(8), dp(8));
+        tvCinemaSubtitle.setVisibility(GONE);
+
+        btnExitCinema = createTextButton("🎬 Thoát Rạp Phim", v -> toggleCinemaMode());
+        btnExitCinema.setVisibility(GONE);
+
         // Header (Drag zone)
-        LinearLayout header = new LinearLayout(context);
+        header = new LinearLayout(context);
         header.setOrientation(HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(0, 0, 0, dp(4));
@@ -93,10 +133,18 @@ public class FloatingSubtitleView extends LinearLayout {
         tvTitle.setTextColor(Color.parseColor("#38BDF8")); // Cyan
         tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         tvTitle.setTypeface(tvTitle.getTypeface(), Typeface.BOLD);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.0f);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
+        titleLp.rightMargin = dp(6);
         header.addView(tvTitle, titleLp);
 
-        // Buttons
+        // Action Buttons trong HorizontalScrollView để không bao giờ bị tràn
+        HorizontalScrollView hsv = new HorizontalScrollView(context);
+        hsv.setHorizontalScrollBarEnabled(false);
+        LinearLayout btnBar = new LinearLayout(context);
+        btnBar.setOrientation(HORIZONTAL);
+        btnBar.setGravity(Gravity.CENTER_VERTICAL);
+
+        // 1. Nút Bật/Tắt Live OCR
         btnLiveOcr = createTextButton("⏸ Live", v -> {
             isLiveOcrRunning = !isLiveOcrRunning;
             btnLiveOcr.setText(isLiveOcrRunning ? "⏸ Live" : "▶ Live");
@@ -104,51 +152,90 @@ public class FloatingSubtitleView extends LinearLayout {
             Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
             if (listener != null) listener.onToggleLiveOcr();
         });
-        header.addView(btnLiveOcr);
+        btnBar.addView(btnLiveOcr);
 
-        btnCrop = createSmallButton("🔲", v -> {
+        // 2. Nút Chọn Vùng
+        btnCrop = createSmallButton("🔲", "Khóa vùng phụ đề", v -> {
             Toast.makeText(getContext(), "Kéo chọn vùng muốn quét Live", Toast.LENGTH_SHORT).show();
             if (listener != null) listener.onSelectRegion();
         });
-        header.addView(btnCrop);
+        btnBar.addView(btnCrop);
 
-        btnCapture = createSmallButton("📷", v -> {
+        // 3. Nút Chụp Nhanh
+        btnCapture = createSmallButton("📷", "Quét màn hình 1 lần", v -> {
             Toast.makeText(getContext(), "Quét màn hình 1 lần...", Toast.LENGTH_SHORT).show();
             if (listener != null) listener.onCaptureScreen();
         });
-        header.addView(btnCapture);
+        btnBar.addView(btnCapture);
 
-        btnListen = createSmallButton("⏸", v -> {
+        // 4. Nút Chế độ Rạp phim (Cinema Mode)
+        btnCinema = createSmallButton("🎬", "Chế độ phụ đề xem phim", v -> toggleCinemaMode());
+        btnBar.addView(btnCinema);
+
+        // 5. Nút Song ngữ / Đơn ngữ (Bilingual Mode)
+        btnBilingual = createSmallButton("🌐", "Chuyển Song ngữ / Chỉ tiếng Việt", v -> {
+            prefs.setBilingualMode(!prefs.isBilingualMode());
+            String msg = prefs.isBilingualMode() ? "Chế độ: Song ngữ (Gốc + Dịch)" : "Chế độ: Chỉ hiển thị bản dịch tiếng Việt";
+            Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
+            updateBilingualState();
+        });
+        btnBar.addView(btnBilingual);
+
+        // 6. Nút Dịch đè trực tiếp màn hình (In-Place Mode)
+        btnInPlace = createSmallButton("🔤", "Bật/Tắt dịch đè màn hình", v -> {
+            prefs.setInPlaceMode(!prefs.isInPlaceMode());
+            String msg = prefs.isInPlaceMode() ? "Đã bật dịch đè trực tiếp lên chữ màn hình!" : "Đã tắt dịch đè trực tiếp";
+            Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
+            updateInPlaceState();
+            if (listener != null) listener.onToggleInPlace(prefs.isInPlaceMode());
+        });
+        btnBar.addView(btnInPlace);
+
+        // 7. Nút Xuất file phụ đề SRT / TXT
+        btnExport = createSmallButton("💾", "Xuất file phụ đề SRT hoặc Ghi chú", v -> showExportDialog());
+        btnBar.addView(btnExport);
+
+        // 8. Nút Nghe STT
+        btnListen = createSmallButton("⏸", "Tạm dừng nghe giọng nói", v -> {
             isListening = !isListening;
             btnListen.setText(isListening ? "⏸" : "▶");
             if (listener != null) listener.onToggleListening();
         });
-        header.addView(btnListen);
+        btnBar.addView(btnListen);
 
-        btnTts = createSmallButton("🔊", v -> {
+        // 9. Nút Giọng Đọc TTS
+        btnTts = createSmallButton("🔊", "Bật/Tắt đọc thành tiếng", v -> {
             ttsMuted = !ttsMuted;
             btnTts.setText(ttsMuted ? "🔇" : "🔊");
             if (listener != null) listener.onToggleTts();
         });
-        header.addView(btnTts);
+        btnBar.addView(btnTts);
 
-        Button btnClear = createSmallButton("🗑️", v -> {
+        // 10. Nút Xóa lịch sử
+        Button btnClear = createSmallButton("🗑️", "Xóa lịch sử", v -> {
             itemsContainer.removeAllViews();
+            historyItems.clear();
+            tvCinemaSubtitle.setText("");
             tvStatus.setText("Đã xóa bản dịch.");
             if (listener != null) listener.onClearHistory();
         });
-        header.addView(btnClear);
+        btnBar.addView(btnClear);
 
-        Button btnClose = createSmallButton("✖", v -> {
+        // 11. Nút Đóng
+        Button btnClose = createSmallButton("✖", "Đóng cửa sổ", v -> {
             if (listener != null) listener.onClose();
         });
-        header.addView(btnClose);
+        btnBar.addView(btnClose);
+
+        hsv.addView(btnBar);
+        LinearLayout.LayoutParams hsvLp = new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.0f);
+        header.addView(hsv, hsvLp);
 
         applyMode(mode);
 
         addView(header);
 
-        // Header drag: TOP|START direct delta add
+        // Drag Handler
         header.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
@@ -174,8 +261,21 @@ public class FloatingSubtitleView extends LinearLayout {
         scrollLp.bottomMargin = dp(4);
         addView(scrollView, scrollLp);
 
+        // Cinema Subtitle Container
+        LinearLayout.LayoutParams cinemaLp = new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+        cinemaLp.gravity = Gravity.CENTER;
+        addView(tvCinemaSubtitle, cinemaLp);
+        addView(btnExitCinema);
+
+        // Chạm vào phụ đề Cinema sẽ hiện nút thoát
+        tvCinemaSubtitle.setOnClickListener(v -> {
+            btnExitCinema.setVisibility(VISIBLE);
+            handler.removeCallbacks(hideExitCinemaRunnable);
+            handler.postDelayed(hideExitCinemaRunnable, 3500);
+        });
+
         // Footer status + Resize grip
-        LinearLayout footer = new LinearLayout(context);
+        footer = new LinearLayout(context);
         footer.setOrientation(HORIZONTAL);
         footer.setGravity(Gravity.CENTER_VERTICAL);
 
@@ -208,6 +308,62 @@ public class FloatingSubtitleView extends LinearLayout {
         footer.addView(resizeGrip);
 
         addView(footer);
+        updateBilingualState();
+        updateInPlaceState();
+    }
+
+    private final Runnable hideExitCinemaRunnable = () -> btnExitCinema.setVisibility(GONE);
+
+    public void toggleCinemaMode() {
+        isCinemaMode = !isCinemaMode;
+        if (isCinemaMode) {
+            header.setVisibility(GONE);
+            footer.setVisibility(GONE);
+            scrollView.setVisibility(GONE);
+            tvCinemaSubtitle.setVisibility(VISIBLE);
+            btnExitCinema.setVisibility(VISIBLE);
+            setBackgroundColor(Color.TRANSPARENT);
+            setPadding(0, 0, 0, 0);
+            handler.postDelayed(hideExitCinemaRunnable, 3000);
+            Toast.makeText(getContext(), "Chế độ Rạp phim: Chạm vào chữ để hiện điều khiển", Toast.LENGTH_SHORT).show();
+        } else {
+            header.setVisibility(VISIBLE);
+            footer.setVisibility(VISIBLE);
+            scrollView.setVisibility(VISIBLE);
+            tvCinemaSubtitle.setVisibility(GONE);
+            btnExitCinema.setVisibility(GONE);
+            setBackground(normalBg);
+            int pad = dp(10);
+            setPadding(pad, dp(6), pad, dp(6));
+        }
+        try { wm.updateViewLayout(this, params); } catch (Exception ignored) {}
+    }
+
+    private void updateBilingualState() {
+        if (btnBilingual != null) {
+            btnBilingual.setTextColor(prefs.isBilingualMode() ? Color.parseColor("#38BDF8") : Color.parseColor("#94A3B8"));
+        }
+    }
+
+    private void updateInPlaceState() {
+        if (btnInPlace != null) {
+            btnInPlace.setTextColor(prefs.isInPlaceMode() ? Color.parseColor("#10B981") : Color.parseColor("#94A3B8"));
+        }
+    }
+
+    private void showExportDialog() {
+        String[] options = {"Xuất file Phụ đề (.SRT)", "Xuất file Ghi chú (.TXT)"};
+        new AlertDialog.Builder(getContext(), android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Xuất lịch sử dịch")
+                .setItems(options, (dialog, which) -> {
+                    if (which == 0) {
+                        SubtitleExporter.exportAsSrt(getContext(), historyItems);
+                    } else {
+                        SubtitleExporter.exportAsTxt(getContext(), historyItems);
+                    }
+                })
+                .setNegativeButton("Hủy", null)
+                .show();
     }
 
     public void applyMode(String mode) {
@@ -217,6 +373,7 @@ public class FloatingSubtitleView extends LinearLayout {
             btnLiveOcr.setVisibility(VISIBLE);
             btnCrop.setVisibility(VISIBLE);
             btnCapture.setVisibility(VISIBLE);
+            btnInPlace.setVisibility(VISIBLE);
             btnListen.setVisibility(GONE);
             btnTts.setVisibility(VISIBLE);
         } else if ("mode_stt".equals(mode)) {
@@ -225,6 +382,7 @@ public class FloatingSubtitleView extends LinearLayout {
             btnLiveOcr.setVisibility(GONE);
             btnCrop.setVisibility(GONE);
             btnCapture.setVisibility(GONE);
+            btnInPlace.setVisibility(GONE);
             btnListen.setVisibility(VISIBLE);
             btnTts.setVisibility(VISIBLE);
         } else {
@@ -233,6 +391,7 @@ public class FloatingSubtitleView extends LinearLayout {
             btnLiveOcr.setVisibility(VISIBLE);
             btnCrop.setVisibility(VISIBLE);
             btnCapture.setVisibility(VISIBLE);
+            btnInPlace.setVisibility(VISIBLE);
             btnListen.setVisibility(VISIBLE);
             btnTts.setVisibility(VISIBLE);
         }
@@ -249,20 +408,28 @@ public class FloatingSubtitleView extends LinearLayout {
 
     public void addTranslation(String orig, String trans) {
         post(() -> {
+            historyItems.add(new SubtitleExporter.SubtitleItem(System.currentTimeMillis(), orig, trans));
+
+            // Cập nhật phụ đề rạp phim
+            tvCinemaSubtitle.setText(trans);
+
             LinearLayout entry = new LinearLayout(getContext());
             entry.setOrientation(VERTICAL);
             entry.setPadding(0, dp(4), 0, dp(6));
 
             String timeStr = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
-            TextView tvOrig = new TextView(getContext());
-            tvOrig.setText("[" + timeStr + "] " + orig);
-            tvOrig.setTextColor(Color.parseColor("#94A3B8"));
-            tvOrig.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            entry.addView(tvOrig);
+            // Nếu bật chế độ Song ngữ thì hiện cả câu gốc
+            if (prefs.isBilingualMode() && orig != null && !orig.isEmpty()) {
+                TextView tvOrig = new TextView(getContext());
+                tvOrig.setText("[" + timeStr + "] " + orig);
+                tvOrig.setTextColor(Color.parseColor("#94A3B8"));
+                tvOrig.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+                entry.addView(tvOrig);
+            }
 
             TextView tvTrans = new TextView(getContext());
-            tvTrans.setText(trans);
+            tvTrans.setText((!prefs.isBilingualMode() ? "[" + timeStr + "] " : "") + trans);
             tvTrans.setTextColor(Color.parseColor("#38BDF8")); // Bright Cyan
             tvTrans.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
             tvTrans.setTypeface(tvTrans.getTypeface(), Typeface.BOLD);
@@ -300,10 +467,10 @@ public class FloatingSubtitleView extends LinearLayout {
         return b;
     }
 
-    private Button createSmallButton(String text, OnClickListener listener) {
+    private Button createSmallButton(String text, String tooltip, OnClickListener listener) {
         Button b = new Button(getContext());
         b.setText(text);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         b.setPadding(dp(4), 0, dp(4), 0);
         b.setBackgroundColor(Color.TRANSPARENT);
         b.setTextColor(Color.WHITE);
@@ -311,6 +478,10 @@ public class FloatingSubtitleView extends LinearLayout {
         lp.leftMargin = dp(2);
         b.setLayoutParams(lp);
         b.setOnClickListener(listener);
+        b.setOnLongClickListener(v -> {
+            Toast.makeText(getContext(), tooltip, Toast.LENGTH_SHORT).show();
+            return true;
+        });
         return b;
     }
 

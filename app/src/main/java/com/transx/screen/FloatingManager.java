@@ -9,7 +9,10 @@ import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import com.transx.screen.ocr.InPlaceOverlayView;
+import com.transx.screen.ocr.OfflineOcrEngine;
 import com.transx.screen.ocr.RegionSelectorView;
+import java.util.List;
 
 public class FloatingManager {
     private final Context context;
@@ -24,6 +27,9 @@ public class FloatingManager {
 
     private RegionSelectorView regionSelectorView;
 
+    private InPlaceOverlayView inPlaceOverlayView;
+    private WindowManager.LayoutParams inPlaceParams;
+
     public interface FloatingListener {
         void onToggleListening();
         void onToggleLiveOcr();
@@ -33,6 +39,7 @@ public class FloatingManager {
         void onRegionCropRequested(Rect region);
         void onClearHistory();
         void onCloseSubtitle();
+        void onToggleInPlace(boolean enabled);
     }
 
     private final FloatingListener listener;
@@ -114,7 +121,7 @@ public class FloatingManager {
         int screenW = dm.widthPixels;
         int screenH = dm.heightPixels;
 
-        int initW = Math.min(dp(340), screenW - dp(24));
+        int initW = Math.min(dp(350), screenW - dp(24));
         int initH = dp(240);
 
         subtitleParams = new WindowManager.LayoutParams(
@@ -163,6 +170,16 @@ public class FloatingManager {
             public void onClearHistory() {
                 if (listener != null) listener.onClearHistory();
             }
+
+            @Override
+            public void onToggleInPlace(boolean enabled) {
+                if (enabled) {
+                    showInPlaceOverlay();
+                } else {
+                    hideInPlaceOverlay();
+                }
+                if (listener != null) listener.onToggleInPlace(enabled);
+            }
         });
 
         try { wm.addView(subtitleView, subtitleParams); } catch (Exception ignored) {}
@@ -183,8 +200,7 @@ public class FloatingManager {
                 PixelFormat.TRANSLUCENT
         );
 
-        regionSelectorView = new RegionSelectorView(context);
-        regionSelectorView.setListener(new RegionSelectorView.Listener() {
+        regionSelectorView = new RegionSelectorView(context, new RegionSelectorView.OnRegionSelectedListener() {
             @Override
             public void onRegionSelected(Rect region) {
                 hideRegionSelector();
@@ -192,7 +208,7 @@ public class FloatingManager {
             }
 
             @Override
-            public void onCancel() {
+            public void onCancelled() {
                 hideRegionSelector();
             }
         });
@@ -207,18 +223,57 @@ public class FloatingManager {
         }
     }
 
+    public void showInPlaceOverlay() {
+        if (inPlaceOverlayView != null) return;
+
+        int layoutType = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : WindowManager.LayoutParams.TYPE_PHONE;
+
+        inPlaceParams = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT
+        );
+
+        inPlaceOverlayView = new InPlaceOverlayView(context);
+        try { wm.addView(inPlaceOverlayView, inPlaceParams); } catch (Exception ignored) {}
+    }
+
+    public void hideInPlaceOverlay() {
+        if (inPlaceOverlayView != null) {
+            inPlaceOverlayView.clearBlocks();
+            try { wm.removeView(inPlaceOverlayView); } catch (Exception ignored) {}
+            inPlaceOverlayView = null;
+        }
+    }
+
+    public void updateInPlaceBlocks(List<OfflineOcrEngine.OcrBlock> blocks) {
+        if (inPlaceOverlayView != null) {
+            inPlaceOverlayView.setBlocks(blocks);
+        }
+    }
+
     public void hideTemporarily(Runnable action) {
         if (bubbleView != null) bubbleView.setVisibility(View.INVISIBLE);
         if (subtitleView != null) subtitleView.setVisibility(View.INVISIBLE);
+        if (inPlaceOverlayView != null) inPlaceOverlayView.setVisibility(View.INVISIBLE);
 
-        subtitleView.postDelayed(() -> {
-            try {
-                action.run();
-            } finally {
-                if (bubbleView != null) bubbleView.setVisibility(View.VISIBLE);
-                if (subtitleView != null) subtitleView.setVisibility(View.VISIBLE);
-            }
-        }, 50);
+        if (subtitleView != null) {
+            subtitleView.postDelayed(() -> {
+                try {
+                    action.run();
+                } finally {
+                    if (bubbleView != null) bubbleView.setVisibility(View.VISIBLE);
+                    if (subtitleView != null) subtitleView.setVisibility(View.VISIBLE);
+                    if (inPlaceOverlayView != null) inPlaceOverlayView.setVisibility(View.VISIBLE);
+                }
+            }, 50);
+        } else {
+            action.run();
+        }
     }
 
     public void hideSubtitle() {
@@ -255,6 +310,7 @@ public class FloatingManager {
 
     public void removeAll() {
         hideRegionSelector();
+        hideInPlaceOverlay();
         if (bubbleView != null) {
             try { wm.removeView(bubbleView); } catch (Exception ignored) {}
             bubbleView = null;

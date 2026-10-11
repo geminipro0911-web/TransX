@@ -66,4 +66,36 @@ public class Prefs {
     public void setTtsVoice(String voice) {
         sp.edit().putString("tts_voice", voice).apply();
     }
+
+    public boolean isCinemaMode() {
+        return sp.getBoolean("cinema_mode", false);
+    }
+
+    public void setCinemaMode(boolean enabled) {
+        sp.edit().putBoolean("cinema_mode", enabled).apply();
+    }
+
+    public boolean isBilingualMode() {
+        return sp.getBoolean("bilingual_mode", true);
+    }
+
+    public void setBilingualMode(boolean enabled) {
+        sp.edit().putBoolean("bilingual_mode", enabled).apply();
+    }
+
+    public boolean isInPlaceMode() {
+        return sp.getBoolean("in_place_mode", false);
+    }
+
+    public void setInPlaceMode(boolean enabled) {
+        sp.edit().putBoolean("in_place_mode", enabled).apply();
+    }
+
+    public boolean isOfflineTranslatePreferred() {
+        return sp.getBoolean("offline_translate_pref", false);
+    }
+
+    public void setOfflineTranslatePreferred(boolean enabled) {
+        sp.edit().putBoolean("offline_translate_pref", enabled).apply();
+    }
 }
