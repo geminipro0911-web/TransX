@@ -649,7 +649,7 @@ public class TransXService extends Service {
                     return;
                 }
 
-                String cleanRec = cleanOcrText(recognizedText, srcLangCode);
+                String cleanRec = recognizedText.trim();
                 if (cleanRec.isEmpty()) return;
 
                 mainHandler.post(() -> {

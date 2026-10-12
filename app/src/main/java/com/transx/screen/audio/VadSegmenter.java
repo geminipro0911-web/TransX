@@ -7,11 +7,11 @@ public class VadSegmenter {
 
     private static final int SR = 16000;
     private static final int FRAME = 320;              // 20 ms frames
-    private static final float THRESH = 0.006f;        // Nhạy hơn để bắt giọng nói nhanh
-    private static final int SILENCE_END_MS = 300;     // Dừng ngắt 300ms là phát hiện hết câu/vế
-    private static final int MIN_SPEECH_MS = 250;      // Tối thiểu 250ms cho các từ ngắn ("OK", "Yes", "Được")
-    private static final int MAX_SEGMENT_MS = 2500;    // Cắt tối đa 2.5s để hiển thị LIVE tức thì, không bị delay
-    private static final int PREROLL_MS = 250;         // Giữ 250ms âm thanh trước khi bắt đầu nói để không mất âm đầu
+    private static final float THRESH = 0.007f;        // Ngưỡng năng lượng bắt tiếng nói chuẩn
+    private static final int SILENCE_END_MS = 600;     // 600ms im lặng là kết thúc câu/vế tự nhiên
+    private static final int MIN_SPEECH_MS = 400;      // Tối thiểu 400ms để loại trừ tiếng thở, tiếng động nhẹ
+    private static final int MAX_SEGMENT_MS = 10000;   // Cho phép câu nói trọn vẹn tới 10 giây, không bị chặt vụn giữa từ!
+    private static final int PREROLL_MS = 350;         // 350ms pre-roll giữ trọn vẹn phụ âm mở đầu câu
 
     private final Listener listener;
     private final float[] preroll = new float[SR * PREROLL_MS / 1000];
@@ -94,8 +94,8 @@ public class VadSegmenter {
             System.arraycopy(seg, 0, out, 0, segLen);
             listener.onSegment(out);
         }
-        // Giữ lại 150ms đuôi cuối làm tiền tố cho câu tiếp theo để tránh ngắt chữ
-        int keepMs = 150;
+        // Giữ lại 300ms đuôi cuối làm tiền tố cho câu tiếp theo nếu bị ép cắt ở mốc MAX_SEGMENT_MS
+        int keepMs = 300;
         int keepSamples = SR * keepMs / 1000;
         if (segLen > keepSamples && inSpeech && speechMs >= MAX_SEGMENT_MS) {
             System.arraycopy(seg, segLen - keepSamples, seg, 0, keepSamples);

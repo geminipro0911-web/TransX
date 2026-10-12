@@ -22,19 +22,58 @@ public class GoogleSpeechClient {
         }
         if (pcmSamples == null || pcmSamples.length == 0) return "";
 
+        // 1. Tìm biên độ đỉnh lớn nhất (Peak Amplitude) để đánh giá độ lớn âm thanh
+        float maxPeak = 0.0f;
+        for (float s : pcmSamples) {
+            float abs = Math.abs(s);
+            if (abs > maxPeak) maxPeak = abs;
+        }
+
+        // 2. Tự động chuẩn hóa âm lượng (Auto Gain Normalization):
+        // Nếu âm thanh quay màn hình/game/video bị quá nhỏ (< 0.65f), tự động khuếch đại lên chuẩn ~0.85f (tối đa x8 lần)
+        // để mô hình AI nhận diện rõ từng âm tiết, phụ âm gió và ngữ điệu
+        float gain = 1.0f;
+        if (maxPeak > 0.005f && maxPeak < 0.65f) {
+            gain = Math.min(8.0f, 0.85f / maxPeak);
+        }
+
         byte[] pcmBytes = new byte[pcmSamples.length * 2];
         for (int i = 0; i < pcmSamples.length; i++) {
-            short s = (short) Math.max(-32768, Math.min(32767, Math.round(pcmSamples[i] * 32767.0f)));
+            float sample = pcmSamples[i] * gain;
+            short s = (short) Math.max(-32768, Math.min(32767, Math.round(sample * 32767.0f)));
             pcmBytes[i * 2] = (byte) (s & 0xff);
             pcmBytes[i * 2 + 1] = (byte) ((s >> 8) & 0xff);
         }
         String base64Audio = Base64.encodeToString(pcmBytes, Base64.NO_WRAP);
 
+        // 3. Cấu hình nhận diện nâng cao Google Cloud Speech-to-Text
         JSONObject config = new JSONObject();
         config.put("encoding", "LINEAR16");
         config.put("sampleRateHertz", 16000);
-        config.put("languageCode", (langCode == null || langCode.isEmpty() || "auto".equals(langCode)) ? "en-US" : langCode);
         config.put("enableAutomaticPunctuation", true);
+        config.put("useEnhanced", true);
+
+        String effectiveLang = (langCode == null || langCode.isEmpty() || "auto".equalsIgnoreCase(langCode)) ? "en-US" : langCode;
+        config.put("languageCode", effectiveLang);
+
+        if ("auto".equalsIgnoreCase(langCode) || langCode == null || langCode.isEmpty()) {
+            JSONArray altLangs = new JSONArray();
+            altLangs.put("vi-VN");
+            altLangs.put("zh-CN");
+            altLangs.put("ja-JP");
+            altLangs.put("ko-KR");
+            altLangs.put("fr-FR");
+            altLangs.put("de-DE");
+            altLangs.put("es-ES");
+            config.put("alternativeLanguageCodes", altLangs);
+        }
+
+        // Với tiếng Anh, sử dụng model latest_long (mô hình Conformer hiện đại nhất của Google)
+        if (effectiveLang.toLowerCase().startsWith("en")) {
+            config.put("model", "latest_long");
+        } else {
+            config.put("model", "default");
+        }
 
         JSONObject audio = new JSONObject();
         audio.put("content", base64Audio);
@@ -44,7 +83,19 @@ public class GoogleSpeechClient {
         payload.put("audio", audio);
 
         String url = STT_ENDPOINT + "?key=" + apiKey.trim();
-        String resp = postJson(url, payload.toString());
+        String resp;
+        try {
+            resp = postJson(url, payload.toString());
+        } catch (Exception ex) {
+            // Nếu model latest_long bị từ chối với ngôn ngữ này, tự động lùi về default model
+            if (config.has("model") && !"default".equals(config.optString("model"))) {
+                config.put("model", "default");
+                payload.put("config", config);
+                resp = postJson(url, payload.toString());
+            } else {
+                throw ex;
+            }
+        }
 
         JSONObject json = new JSONObject(resp);
         if (json.has("error")) {

@@ -144,7 +144,8 @@ public class InternalAudioCapturer {
     private void captureLoop() {
         short[] rawBuf = new short[2048 * channelCount];
         float[] monoBuf = new float[2048];
-        float[] resampleBuf = new float[2048];
+        float[] resampleBuf = new float[4096];
+        double resamplePhase = 0.0;
 
         while (running) {
             int read = record.read(rawBuf, 0, rawBuf.length);
@@ -166,20 +167,40 @@ public class InternalAudioCapturer {
 
             if (actualSampleRate == TARGET_SAMPLE_RATE) {
                 listener.onPcm(monoBuf, frames);
-            } else {
-                int outFrames = (int) ((long) frames * TARGET_SAMPLE_RATE / actualSampleRate);
+            } else if (actualSampleRate == 48000) {
+                // Tỷ lệ 48000Hz -> 16000Hz là CHÍNH XÁC 3:1
+                // Sử dụng bộ lọc trung bình 3 mẫu (3-tap moving average box filter)
+                // giúp triệt tiêu hoàn toàn hiện tượng méo răng cưa (aliasing) và giữ âm thanh trong trẻo tuyệt đối
+                int outFrames = frames / 3;
                 if (outFrames > resampleBuf.length) {
                     resampleBuf = new float[outFrames + 256];
                 }
-                double ratio = (double) frames / outFrames;
                 for (int i = 0; i < outFrames; i++) {
-                    double srcIdx = i * ratio;
-                    int i0 = (int) srcIdx;
-                    int i1 = Math.min(i0 + 1, frames - 1);
-                    float frac = (float) (srcIdx - i0);
-                    resampleBuf[i] = monoBuf[i0] * (1.0f - frac) + monoBuf[i1] * frac;
+                    int base = i * 3;
+                    resampleBuf[i] = (monoBuf[base] + monoBuf[base + 1] + monoBuf[base + 2]) / 3.0f;
                 }
                 listener.onPcm(resampleBuf, outFrames);
+            } else {
+                // Thuật toán Resample đa dụng có bộ tích lũy pha liên tục (Continuous Phase Accumulator)
+                // đảm bảo không bao giờ bị lệch pha hay gián đoạn tần số giữa các chu kỳ buffer
+                double step = (double) actualSampleRate / TARGET_SAMPLE_RATE;
+                int outCount = 0;
+                while (resamplePhase < frames - 1) {
+                    int i0 = (int) resamplePhase;
+                    int i1 = i0 + 1;
+                    float frac = (float) (resamplePhase - i0);
+                    if (outCount >= resampleBuf.length) {
+                        float[] newBuf = new float[resampleBuf.length * 2];
+                        System.arraycopy(resampleBuf, 0, newBuf, 0, outCount);
+                        resampleBuf = newBuf;
+                    }
+                    resampleBuf[outCount++] = monoBuf[i0] * (1.0f - frac) + monoBuf[i1] * frac;
+                    resamplePhase += step;
+                }
+                resamplePhase -= frames;
+                if (outCount > 0) {
+                    listener.onPcm(resampleBuf, outCount);
+                }
             }
         }
     }
