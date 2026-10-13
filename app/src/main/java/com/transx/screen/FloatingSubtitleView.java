@@ -55,6 +55,12 @@ public class FloatingSubtitleView extends LinearLayout {
     private LinearLayout itemsContainer;
     private ScrollView scrollView;
 
+    // Streaming card views (Real-time live streaming)
+    private LinearLayout streamingCard;
+    private TextView tvStreamBadge;
+    private TextView tvStreamOrig;
+    private TextView tvStreamTrans;
+
     // Cinema Subtitle View
     private TextView tvCinemaSubtitle;
     private Button btnExitCinema;
@@ -105,6 +111,44 @@ public class FloatingSubtitleView extends LinearLayout {
 
         itemsContainer = new LinearLayout(context);
         itemsContainer.setOrientation(VERTICAL);
+
+        // Streaming Card (Active live streaming card at bottom of list)
+        streamingCard = new LinearLayout(context);
+        streamingCard.setOrientation(VERTICAL);
+        int scPad = dp(10);
+        streamingCard.setPadding(scPad, scPad, scPad, scPad);
+        GradientDrawable scBg = new GradientDrawable();
+        scBg.setShape(GradientDrawable.RECTANGLE);
+        scBg.setColor(Color.parseColor("#1E293B"));
+        scBg.setCornerRadius(dp(12));
+        scBg.setStroke(dp(1), Color.parseColor("#38BDF8"));
+        streamingCard.setBackground(scBg);
+        LinearLayout.LayoutParams scLp = new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+        scLp.bottomMargin = dp(8);
+        streamingCard.setLayoutParams(scLp);
+
+        tvStreamBadge = new TextView(context);
+        tvStreamBadge.setText("⚡ LIVE STREAM");
+        tvStreamBadge.setTextColor(Color.parseColor("#38BDF8"));
+        tvStreamBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        tvStreamBadge.setTypeface(Typeface.DEFAULT_BOLD);
+        streamingCard.addView(tvStreamBadge);
+
+        tvStreamOrig = new TextView(context);
+        tvStreamOrig.setTextColor(Color.parseColor("#F1F5F9"));
+        tvStreamOrig.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        tvStreamOrig.setPadding(0, dp(2), 0, 0);
+        streamingCard.addView(tvStreamOrig);
+
+        tvStreamTrans = new TextView(context);
+        tvStreamTrans.setTextColor(Color.parseColor("#22D3EE"));
+        tvStreamTrans.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        tvStreamTrans.setTypeface(Typeface.DEFAULT_BOLD);
+        tvStreamTrans.setPadding(0, dp(2), 0, 0);
+        streamingCard.addView(tvStreamTrans);
+
+        streamingCard.setVisibility(GONE);
+        itemsContainer.addView(streamingCard);
 
         scrollView = new ScrollView(context);
         scrollView.setFillViewport(true);
@@ -214,6 +258,8 @@ public class FloatingSubtitleView extends LinearLayout {
         // 10. Nút Xóa lịch sử
         Button btnClear = createSmallButton("🗑️", "Xóa lịch sử", v -> {
             itemsContainer.removeAllViews();
+            itemsContainer.addView(streamingCard);
+            streamingCard.setVisibility(GONE);
             historyItems.clear();
             tvCinemaSubtitle.setText("");
             tvStatus.setText("Đã xóa bản dịch.");
@@ -406,6 +452,36 @@ public class FloatingSubtitleView extends LinearLayout {
         post(() -> tvStatus.setText(text));
     }
 
+    public void updateStreamingText(String orig, String trans, boolean isFinal) {
+        post(() -> {
+            if (isFinal) {
+                streamingCard.setVisibility(GONE);
+                tvStreamOrig.setText("");
+                tvStreamTrans.setText("");
+                if (trans != null && !trans.isEmpty()) {
+                    tvCinemaSubtitle.setText(trans);
+                }
+            } else {
+                streamingCard.setVisibility(VISIBLE);
+                if (orig == null || orig.trim().isEmpty()) {
+                    tvStreamBadge.setText("⚡ Đang lắng nghe...");
+                    tvStreamOrig.setText("...");
+                    tvStreamTrans.setText("");
+                } else {
+                    tvStreamBadge.setText("⚡ Live Stream");
+                    tvStreamOrig.setText(orig + " ▌");
+                    tvStreamTrans.setText(trans != null && !trans.trim().isEmpty() ? trans : "Đang dịch...");
+                    if (trans != null && !trans.trim().isEmpty()) {
+                        tvCinemaSubtitle.setText(trans);
+                    } else {
+                        tvCinemaSubtitle.setText(orig);
+                    }
+                }
+                scrollView.post(() -> scrollView.fullScroll(View.FOCUS_DOWN));
+            }
+        });
+    }
+
     public void addTranslation(String orig, String trans) {
         post(() -> {
             historyItems.add(new SubtitleExporter.SubtitleItem(System.currentTimeMillis(), orig, trans));
@@ -415,25 +491,45 @@ public class FloatingSubtitleView extends LinearLayout {
 
             LinearLayout entry = new LinearLayout(getContext());
             entry.setOrientation(VERTICAL);
-            entry.setPadding(0, dp(4), 0, dp(6));
+            int ePad = dp(10);
+            entry.setPadding(ePad, ePad, ePad, ePad);
+
+            GradientDrawable cardBg = new GradientDrawable();
+            cardBg.setShape(GradientDrawable.RECTANGLE);
+            cardBg.setColor(Color.parseColor("#1E293B"));
+            cardBg.setCornerRadius(dp(12));
+            cardBg.setStroke(dp(1), Color.parseColor("#334155"));
+            entry.setBackground(cardBg);
+
+            LinearLayout.LayoutParams entryLp = new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+            entryLp.bottomMargin = dp(8);
+            entry.setLayoutParams(entryLp);
 
             String timeStr = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
-            // Nếu bật chế độ Song ngữ thì hiện cả câu gốc
-            if (prefs.isBilingualMode() && orig != null && !orig.isEmpty()) {
+            // Header row with time
+            TextView tvTime = new TextView(getContext());
+            tvTime.setText("🕒 " + timeStr);
+            tvTime.setTextColor(Color.parseColor("#64748B"));
+            tvTime.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+            entry.addView(tvTime);
+
+            // Nếu có câu gốc thì hiển thị
+            if (orig != null && !orig.trim().isEmpty()) {
                 TextView tvOrig = new TextView(getContext());
-                tvOrig.setText("[" + timeStr + "] " + orig);
-                tvOrig.setTextColor(Color.parseColor("#94A3B8"));
-                tvOrig.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+                tvOrig.setText(orig);
+                tvOrig.setTextColor(Color.parseColor("#F1F5F9"));
+                tvOrig.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+                tvOrig.setPadding(0, dp(2), 0, 0);
                 entry.addView(tvOrig);
             }
 
             TextView tvTrans = new TextView(getContext());
-            tvTrans.setText((!prefs.isBilingualMode() ? "[" + timeStr + "] " : "") + trans);
+            tvTrans.setText(trans);
             tvTrans.setTextColor(Color.parseColor("#38BDF8")); // Bright Cyan
             tvTrans.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
             tvTrans.setTypeface(tvTrans.getTypeface(), Typeface.BOLD);
-            tvTrans.setPadding(0, dp(2), 0, 0);
+            tvTrans.setPadding(0, dp(3), 0, 0);
             entry.addView(tvTrans);
 
             entry.setOnClickListener(v -> {
@@ -444,7 +540,13 @@ public class FloatingSubtitleView extends LinearLayout {
                 }
             });
 
-            itemsContainer.addView(entry);
+            // Luôn thêm trước streamingCard để streamingCard luôn nằm ở đáy danh sách
+            int streamIdx = itemsContainer.indexOfChild(streamingCard);
+            if (streamIdx >= 0) {
+                itemsContainer.addView(entry, streamIdx);
+            } else {
+                itemsContainer.addView(entry);
+            }
             scrollView.post(() -> scrollView.fullScroll(View.FOCUS_DOWN));
         });
     }

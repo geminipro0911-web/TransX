@@ -329,6 +329,12 @@ public class FloatingManager {
         }
     }
 
+    public void updateStreamingText(String orig, String trans, boolean isFinal) {
+        if (subtitleView != null) {
+            subtitleView.updateStreamingText(orig, trans, isFinal);
+        }
+    }
+
     public void removeAll() {
         hideRegionSelector();
         hideInPlaceOverlay();

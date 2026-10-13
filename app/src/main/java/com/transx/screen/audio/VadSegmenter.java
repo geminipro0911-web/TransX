@@ -3,6 +3,8 @@ package com.transx.screen.audio;
 public class VadSegmenter {
     public interface Listener {
         void onSegment(float[] samples);
+        default void onPartial(float[] samples) {}
+        default void onSpeechStart() {}
     }
 
     private static final int SR = 16000;
@@ -21,6 +23,7 @@ public class VadSegmenter {
     private int segLen = 0;
     private int silenceMs = 0;
     private int speechMs = 0;
+    private int lastPartialMs = 0;
     private boolean inSpeech = false;
     private float noiseFloor = 0.002f;
 
@@ -56,15 +59,24 @@ public class VadSegmenter {
                     segLen = 0;
                     speechMs = 0;
                     silenceMs = 0;
+                    lastPartialMs = 0;
                     int k = preroll.length;
                     for (int i = 0; i < k && segLen < seg.length; i++) {
                         int idx = (prerollPos + i) % k;
                         seg[segLen++] = preroll[idx];
                     }
+                    listener.onSpeechStart();
                 }
                 silenceMs = 0;
                 speechMs += 20;
                 append(pcm, off, len);
+
+                // Phát tín hiệu Partial định kỳ mỗi 700ms để hiển thị Live Stream theo thời gian thực
+                if (speechMs - lastPartialMs >= 700 && segLen >= (SR * 400 / 1000)) {
+                    lastPartialMs = speechMs;
+                    emitPartial();
+                }
+
                 if (speechMs >= MAX_SEGMENT_MS) {
                     emit();
                 }
@@ -77,6 +89,14 @@ public class VadSegmenter {
                     emit();
                 }
             }
+        }
+    }
+
+    private void emitPartial() {
+        if (segLen >= (SR * 400 / 1000)) {
+            float[] partial = new float[segLen];
+            System.arraycopy(seg, 0, partial, 0, segLen);
+            listener.onPartial(partial);
         }
     }
 
@@ -107,6 +127,7 @@ public class VadSegmenter {
             segLen = 0;
             speechMs = 0;
             silenceMs = 0;
+            lastPartialMs = 0;
         }
     }
 }

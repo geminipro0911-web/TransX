@@ -53,6 +53,55 @@ public class TransXService extends Service {
     public static Intent pendingProjectionData = null;
     public static int pendingProjectionCode = 0;
 
+    // Singleton instance and streaming listener for Live UI stream
+    private static TransXService sInstance = null;
+
+    public interface StreamingListener {
+        void onStreamingUpdate(String original, String translated, boolean isFinal);
+        void onSpeechStart();
+        void onStatusUpdate(String status, int color);
+        void onHistoryCleared();
+    }
+
+    private static StreamingListener sStreamingListener = null;
+
+    public static void setStreamingListener(StreamingListener listener) {
+        sStreamingListener = listener;
+    }
+
+    public static void removeStreamingListener(StreamingListener listener) {
+        if (sStreamingListener == listener) {
+            sStreamingListener = null;
+        }
+    }
+
+    public static boolean isServiceRunning() {
+        return sInstance != null;
+    }
+
+    public static TransXService getInstance() {
+        return sInstance;
+    }
+
+    private static final java.util.List<com.transx.screen.util.SubtitleExporter.SubtitleItem> sSessionHistory =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    public static java.util.List<com.transx.screen.util.SubtitleExporter.SubtitleItem> getSessionHistory() {
+        return new java.util.ArrayList<>(sSessionHistory);
+    }
+
+    public static void addSessionHistory(String orig, String trans) {
+        if ((orig == null || orig.trim().isEmpty()) && (trans == null || trans.trim().isEmpty())) return;
+        sSessionHistory.add(new com.transx.screen.util.SubtitleExporter.SubtitleItem(System.currentTimeMillis(), orig, trans));
+    }
+
+    public static void clearSessionHistory() {
+        sSessionHistory.clear();
+        if (sStreamingListener != null) {
+            sStreamingListener.onHistoryCleared();
+        }
+    }
+
     private String currentMode = MODE_BOTH;
 
     private Handler mainHandler;
@@ -65,6 +114,8 @@ public class TransXService extends Service {
     private TranslationManager translationManager;
     private FloatingManager floatingManager;
     private ExecutorService processPool;
+    private ExecutorService partialPool;
+    private final java.util.concurrent.atomic.AtomicBoolean isPartialProcessing = new java.util.concurrent.atomic.AtomicBoolean(false);
     private boolean isListening = false;
     private volatile boolean isScreenOn = true;
 
@@ -103,10 +154,12 @@ public class TransXService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        sInstance = this;
         mainHandler = new Handler(Looper.getMainLooper());
         prefs = new Prefs(this);
         translationManager = new TranslationManager();
         processPool = Executors.newSingleThreadExecutor();
+        partialPool = Executors.newSingleThreadExecutor();
 
         createNotificationChannel();
 
@@ -306,7 +359,22 @@ public class TransXService extends Service {
             boolean useInternal = "internal".equals(prefs.getAudioSource());
 
             if (vad == null) {
-                vad = new VadSegmenter(this::onSpeechSegmentDetected);
+                vad = new VadSegmenter(new VadSegmenter.Listener() {
+                    @Override
+                    public void onSpeechStart() {
+                        onSpeechStarted();
+                    }
+
+                    @Override
+                    public void onPartial(float[] samples) {
+                        onSpeechPartialDetected(samples);
+                    }
+
+                    @Override
+                    public void onSegment(float[] samples) {
+                        onSpeechSegmentDetected(samples);
+                    }
+                });
             }
 
             if (capturer == null) {
@@ -566,8 +634,10 @@ public class TransXService extends Service {
                     recentTranslatedCache.put(cleanTrans.toLowerCase(), Boolean.TRUE);
 
                     final String textToDisplay = cleanText;
+                    addSessionHistory(textToDisplay, cleanTrans);
                     mainHandler.post(() -> {
                         if (!isLiveOcrRunning || epoch != liveOcrEpoch.get()) return;
+                        broadcastStreamingUpdate(textToDisplay, cleanTrans, true);
                         floatingManager.addTranslation(textToDisplay, cleanTrans);
                         floatingManager.updateStatus("Live OCR: Đang theo dõi...", Color.parseColor("#10B981"));
                     });
@@ -623,11 +693,67 @@ public class TransXService extends Service {
 
     // ---------- VÒNG LẶP DỊCH GIỌNG NÓI STT ----------
 
+    private void onSpeechStarted() {
+        if (!isListening) return;
+        mainHandler.post(() -> {
+            if (floatingManager != null) {
+                floatingManager.updateStreamingText("", "", false);
+                floatingManager.updateStatus("⚡ Đang lắng nghe...", Color.parseColor("#38BDF8"));
+            }
+            if (sStreamingListener != null) {
+                sStreamingListener.onSpeechStart();
+                sStreamingListener.onStatusUpdate("⚡ Đang lắng nghe...", Color.parseColor("#38BDF8"));
+            }
+        });
+    }
+
+    private void onSpeechPartialDetected(float[] pcmSamples) {
+        if (!isListening) return;
+        if (!isPartialProcessing.compareAndSet(false, true)) {
+            return;
+        }
+
+        final long epoch = audioEpoch.get();
+        partialPool.execute(() -> {
+            try {
+                if (!isListening || epoch != audioEpoch.get()) return;
+                String apiKey = prefs.getGoogleApiKey();
+                String srcLangCode = prefs.getSourceLang();
+                Lang srcLang = Lang.findByEdgeCode(srcLangCode);
+
+                String partialRec = GoogleSpeechClient.recognize(pcmSamples, srcLang.googleSttCode, apiKey);
+                if (!isListening || epoch != audioEpoch.get()) return;
+
+                if (partialRec != null && !partialRec.trim().isEmpty()) {
+                    String cleanPart = partialRec.trim();
+                    String targetLangCode = prefs.getTargetLang();
+                    String partialTrans = translationManager.translate(cleanPart, srcLang.edgeCode, targetLangCode, prefs.isOfflineTranslatePreferred());
+                    String cleanPartTrans = cleanSpokenText(partialTrans);
+
+                    mainHandler.post(() -> {
+                        if (!isListening || epoch != audioEpoch.get()) return;
+                        broadcastStreamingUpdate(cleanPart, cleanPartTrans, false);
+                    });
+                }
+            } catch (Throwable ignored) {
+            } finally {
+                isPartialProcessing.set(false);
+            }
+        });
+    }
+
     private void onSpeechSegmentDetected(float[] pcmSamples) {
         final long epoch = audioEpoch.get();
         if (!isListening) return;
 
-        floatingManager.updateStatus("Đang nhận dạng...", Color.parseColor("#F59E0B"));
+        mainHandler.post(() -> {
+            if (floatingManager != null) {
+                floatingManager.updateStatus("Đang hoàn thiện câu...", Color.parseColor("#F59E0B"));
+            }
+            if (sStreamingListener != null) {
+                sStreamingListener.onStatusUpdate("Đang hoàn thiện câu...", Color.parseColor("#F59E0B"));
+            }
+        });
 
         processPool.execute(() -> {
             try {
@@ -643,7 +769,13 @@ public class TransXService extends Service {
                 if (recognizedText == null || recognizedText.trim().isEmpty()) {
                     mainHandler.post(() -> {
                         if (isListening && epoch == audioEpoch.get()) {
-                            floatingManager.updateStatus("Đang lắng nghe trực tiếp...", Color.parseColor("#10B981"));
+                            broadcastStreamingUpdate("", "", true);
+                            if (floatingManager != null) {
+                                floatingManager.updateStatus("Đang lắng nghe trực tiếp...", Color.parseColor("#10B981"));
+                            }
+                            if (sStreamingListener != null) {
+                                sStreamingListener.onStatusUpdate("Đang lắng nghe trực tiếp...", Color.parseColor("#10B981"));
+                            }
                         }
                     });
                     return;
@@ -652,44 +784,55 @@ public class TransXService extends Service {
                 String cleanRec = recognizedText.trim();
                 if (cleanRec.isEmpty()) return;
 
-                mainHandler.post(() -> {
-                    if (isListening && epoch == audioEpoch.get()) {
-                        floatingManager.updateStatus("Đang dịch: " + cleanRec, Color.parseColor("#38BDF8"));
-                    }
-                });
-
                 String targetLangCode = prefs.getTargetLang();
                 String translatedText = translationManager.translate(cleanRec, srcLang.edgeCode, targetLangCode, prefs.isOfflineTranslatePreferred());
 
                 if (!isListening || epoch != audioEpoch.get()) return;
                 String cleanTrans = cleanSpokenText(translatedText);
 
+                addSessionHistory(cleanRec, cleanTrans);
+
                 mainHandler.post(() -> {
                     if (!isListening || epoch != audioEpoch.get()) return;
-                    floatingManager.addTranslation(cleanRec, cleanTrans);
-                    floatingManager.updateStatus("Đang đọc...", Color.parseColor("#818CF8"));
+                    broadcastStreamingUpdate(cleanRec, cleanTrans, true);
+                    if (floatingManager != null) {
+                        floatingManager.addTranslation(cleanRec, cleanTrans);
+                        floatingManager.updateStatus("Đang lắng nghe...", Color.parseColor("#10B981"));
+                    }
+                    if (sStreamingListener != null) {
+                        sStreamingListener.onStatusUpdate("Đang lắng nghe...", Color.parseColor("#10B981"));
+                    }
                 });
 
-                if (isListening && epoch == audioEpoch.get() && prefs.isTtsEnabled() && ttsPlayer != null) {
+                if (isListening && epoch == audioEpoch.get() && prefs.isTtsEnabled() && ttsPlayer != null && !cleanTrans.isEmpty()) {
                     Lang targetLang = Lang.findByEdgeCode(targetLangCode);
                     ttsPlayer.speak(cleanTrans, targetLang.googleSttCode);
                 }
-
-                mainHandler.postDelayed(() -> {
-                    if (isListening && epoch == audioEpoch.get()) {
-                        floatingManager.updateStatus("Đang lắng nghe trực tiếp...", Color.parseColor("#10B981"));
-                    }
-                }, 800);
 
             } catch (Throwable e) {
                 Log.e(TAG, "Audio Pipeline error: " + e.getMessage());
                 mainHandler.post(() -> {
                     if (isListening && epoch == audioEpoch.get()) {
-                        floatingManager.updateStatus("Lỗi STT: " + e.getMessage(), Color.parseColor("#EF4444"));
+                        broadcastStreamingUpdate("", "", true);
+                        if (floatingManager != null) {
+                            floatingManager.updateStatus("Lỗi STT: " + e.getMessage(), Color.parseColor("#EF4444"));
+                        }
+                        if (sStreamingListener != null) {
+                            sStreamingListener.onStatusUpdate("Lỗi STT: " + e.getMessage(), Color.parseColor("#EF4444"));
+                        }
                     }
                 });
             }
         });
+    }
+
+    private void broadcastStreamingUpdate(String orig, String trans, boolean isFinal) {
+        if (floatingManager != null) {
+            floatingManager.updateStreamingText(orig, trans, isFinal);
+        }
+        if (sStreamingListener != null) {
+            sStreamingListener.onStreamingUpdate(orig, trans, isFinal);
+        }
     }
 
     private void captureAndTranslateFullScreen() {
@@ -810,7 +953,10 @@ public class TransXService extends Service {
                     recentTranslatedCache.put(cleanTrans.toLowerCase(), Boolean.TRUE);
                 }
 
+                addSessionHistory(cleanRec, cleanTrans);
+
                 mainHandler.post(() -> {
+                    broadcastStreamingUpdate(cleanRec, cleanTrans, true);
                     floatingManager.addTranslation(cleanRec, cleanTrans);
                     floatingManager.updateStatus("Đã dịch xong chữ màn hình", Color.parseColor("#10B981"));
                 });
@@ -887,6 +1033,11 @@ public class TransXService extends Service {
         if (processPool != null) {
             processPool.shutdownNow();
         }
+        if (partialPool != null) {
+            partialPool.shutdownNow();
+        }
+        sInstance = null;
+        sStreamingListener = null;
         OfflineOcrEngine.release();
         pendingProjectionData = null;
     }

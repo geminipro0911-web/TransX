@@ -11,3 +11,5 @@
 *.aab
 *.zip
 build_output/
+
+*.mp4
